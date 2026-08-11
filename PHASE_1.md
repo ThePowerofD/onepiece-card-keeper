@@ -14,7 +14,7 @@ Depends on Phase 0. Model and schema: [DESIGN.md](DESIGN.md). Rationale:
 |---|---|
 | 1.1 Schema additions | **Done** — `db_setup.py`, tests in `tests/test_schema.py` |
 | 1.2 Limitless decklist parser | **Done** — `deck_parser.py`, tests in `tests/test_deck_parser.py` |
-| 1.3 Card resolution | Not started |
+| 1.3 Card resolution | **Done** — `resolve.py`, tests in `tests/test_resolve.py` |
 | 1.4 Collection commands | Not started |
 | 1.5 Storage location commands | Not started |
 | 1.6 Deck import | Not started |
@@ -129,7 +129,7 @@ malformed lines, and an empty string.
 
 - `resolve_base_id(conn, base_card_id)` → all printings, `[]` if unknown.
 - `default_printing(conn, base_card_id)` → the variant-free printing; falls back
-  to lowest-sorting where none exists (8 promo cards).
+  to lowest-sorting where none exists (defensive — after D-014 every card has one).
 - `unknown_ids(conn, ids)` → ids absent from `cards`, for import warnings.
 
 **Done when:** correct for a single-printing card, a 7-printing card (`P-029`),

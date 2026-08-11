@@ -281,9 +281,14 @@ carry both `Navy` and `Admiral`, and effects targeting either will match.
 Direct consequence of D-003. A decklist says `4 Monkey D. Luffy OP05-097`, but
 the collection needs a specific `card_image_id`. Something has to choose.
 
-Import credits the variant-free base printing automatically; where none exists
-(8 promo cards) it falls back to the lowest-sorting printing. Correct it
-afterwards with `collection set` if you actually sleeved an alt art.
+Import credits the variant-free base printing automatically, falling back to the
+lowest-sorting printing if a card ever lacks one. Correct it afterwards with
+`collection set` if you actually sleeved an alt art.
+
+*(Factual correction, 2026-08-11: this entry first said 8 promo cards lack a
+variant-free printing. That was already false when written — D-014's
+normalization had fixed all 8 earlier the same day. The fallback is defensive,
+not a live code path. The decision itself is unchanged.)*
 
 A 50-card deck imports with zero prompts, which is what makes D-011 viable at
 all. Prompting per card was rejected as unusable across 5000+ cards.
