@@ -34,6 +34,8 @@ knowing why it's that way? If not, it doesn't need an entry.
 | [D-018](#d-018--add-foil_quantity-anyway) | Add `foil_quantity` anyway | 2026-08-11 |
 | [D-019](#d-019--storage-locations-move-into-phase-1) | Storage locations in Phase 1 | 2026-08-11 |
 | [D-020](#d-020--six-doc-files-one-job-each) | Six doc files, one job each | 2026-08-11 |
+| [D-021](#d-021--the-leader-is-stored-twice-on-purpose) | The leader is stored twice, on purpose | 2026-08-11 |
+| [D-022](#d-022--replacing-a-deck-credits-only-increases) | Replacing a deck credits only increases | 2026-08-11 |
 
 ---
 
@@ -371,3 +373,47 @@ reader can't tell which parts are real, none of it is trustworthy.
 
 `project_recap.md` and `PHASE_0.md` were deleted rather than archived — their
 content lives here and in `DESIGN.md`, and git preserves the originals.
+
+---
+
+## D-021 — The leader is stored twice, on purpose
+
+**2026-08-11**
+
+`decks.leader_id` names the leader, and the leader also gets a row in
+`deck_cards` with quantity 1. That looks like duplication and someone will want
+to remove one of them.
+
+It isn't. The two carry different meaning:
+
+- `leader_id` answers *which card is this deck's leader* — needed to display the
+  deck and, later, to filter legal cards by leader colour.
+- The `deck_cards` row makes the leader **lockable**. `available_cards` computes
+  commitment from `deck_cards` alone (D-009), so a leader outside that table
+  would be sleeved in a physical deck yet still report as free to use — and
+  importing a deck would never credit the leader to your collection, leaving you
+  owning a card the app can't see.
+
+Removing either one breaks something real.
+
+---
+
+## D-022 — Replacing a deck credits only increases
+
+**2026-08-11**
+
+Re-importing an edited decklist over an existing deck (D-017's "replace") has to
+decide what happens to the collection.
+
+It credits the **positive difference only**. If a card went from 3 copies to 4,
+the collection gains 1. If it went from 4 to 2, or left the list entirely, the
+collection is **not** reduced.
+
+That's the physically true model: taking a card out of a deck doesn't mean you
+sold it. You still own it — it just becomes loose, and availability rises on its
+own because commitment dropped. Decrementing would silently destroy inventory
+every time you tuned a list, and it would target the wrong printing anyway if
+you'd reassigned one by hand (D-016).
+
+Consequence: replacing a deck can never lose you cards, and re-importing an
+unchanged list is a no-op on the collection.

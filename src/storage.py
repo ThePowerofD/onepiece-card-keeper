@@ -39,7 +39,7 @@ def _location_id(conn: sqlite3.Connection, name: str) -> int:
         "SELECT id FROM storage_locations WHERE name = ?", (name.strip(),)
     ).fetchone()
     if row is None:
-        raise StorageError(f"no storage location named {name!r} — create it with `location add`")
+        raise StorageError(f"no storage location named {name!r} - create it with `location add`")
     return row[0]
 
 
@@ -48,7 +48,7 @@ def _require_card(conn: sqlite3.Connection, card_image_id: str) -> str:
         "SELECT base_card_id FROM cards WHERE card_image_id = ?", (card_image_id,)
     ).fetchone()
     if row is None:
-        raise StorageError(f"unknown printing {card_image_id!r} — not in the card database")
+        raise StorageError(f"unknown printing {card_image_id!r} - not in the card database")
     return row[0]
 
 
@@ -66,7 +66,7 @@ def _overplacement_warning(conn: sqlite3.Connection, card_image_id: str, base_ca
 
     if placed > owned:
         return (
-            f"{card_image_id}: {placed} placed but only {owned} owned — "
+            f"{card_image_id}: {placed} placed but only {owned} owned - "
             f"check the quantities"
         )
 

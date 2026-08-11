@@ -134,7 +134,7 @@ def parse_decklist(text: str) -> ParsedDeck:
 
         card, reason = parse_card_line(body)
         if card is None:
-            warnings.append(f"line {lineno}: {reason} — {line!r}")
+            warnings.append(f"line {lineno}: {reason} - {line!r}")
             continue
 
         if section == "leader":

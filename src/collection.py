@@ -69,7 +69,7 @@ def _base_card_id(conn: sqlite3.Connection, card_image_id: str) -> str:
         "SELECT base_card_id FROM cards WHERE card_image_id = ?", (card_image_id,)
     ).fetchone()
     if row is None:
-        raise CollectionError(f"unknown printing {card_image_id!r} — not in the card database")
+        raise CollectionError(f"unknown printing {card_image_id!r} - not in the card database")
     return row[0]
 
 
@@ -129,13 +129,29 @@ def _current(conn: sqlite3.Connection, card_image_id: str) -> int:
     return row[0] if row else 0
 
 
-def _write(conn: sqlite3.Connection, card_image_id: str, quantity: int) -> int:
+def write_quantity(conn: sqlite3.Connection, card_image_id: str, quantity: int) -> int:
+    """Set a quantity **without committing** — callers own the transaction.
+
+    Deck import needs several collection writes to land atomically with the deck
+    itself, so the commit can't happen in here.
+    """
     conn.execute(
         "INSERT INTO collection (card_image_id, quantity) VALUES (?, ?) "
         "ON CONFLICT(card_image_id) DO UPDATE SET "
         "quantity = excluded.quantity, updated_at = CURRENT_TIMESTAMP",
         (card_image_id, quantity),
     )
+    return quantity
+
+
+def credit(conn: sqlite3.Connection, card_image_id: str, delta: int) -> int:
+    """Add `delta` copies without committing. Returns the new quantity."""
+    new_quantity = max(0, _current(conn, card_image_id) + delta)
+    return write_quantity(conn, card_image_id, new_quantity)
+
+
+def _write(conn: sqlite3.Connection, card_image_id: str, quantity: int) -> int:
+    write_quantity(conn, card_image_id, quantity)
     conn.commit()
     return quantity
 
