@@ -64,7 +64,7 @@ python -m pytest tests/ -v
   cards table count:  4338
 ```
 
-...and 53 passing tests. Anything else means something changed upstream —
+...and 246 passing tests. Anything else means something changed upstream —
 `Unknown sub_types` above 0 usually means a new set introduced a card type;
 add it to `SEED_TYPES` in `src/known_types.py` and re-sync.
 
@@ -99,9 +99,13 @@ python -m src.cli collection list --set OP-05 --owned-only
 # Storage — where the loose cards physically are
 python -m src.cli location add "Binder A" --notes "red decks"
 python -m src.cli location list
+python -m src.cli location rename "Binder A" "Binder One"
+python -m src.cli location delete "Binder One"   # you still own the cards
 python -m src.cli place OP05-097 "Binder A" 2
-python -m src.cli unplace OP05-097 "Binder A"
+python -m src.cli unplace OP05-097 "Binder A" 1  # omit the number to remove all
 ```
+
+Every command takes `--db PATH` to work against a different database file.
 
 **A physical deck locks its cards** — they stop counting as available elsewhere.
 A wishlist deck locks nothing and reports what you're missing. Toggle with
@@ -143,7 +147,7 @@ Five files, each with one job. Nothing is documented in two places.
 |---|---|---|
 | **README.md** | This file — what it is, where it stands, how to run it | Every session |
 | **[DESIGN.md](DESIGN.md)** | What **exists** — model, schema, rules, API | When the system changes |
-| **[PHASE_1.md](PHASE_1.md)** | What **doesn't exist yet** — current phase tasks | While working the phase |
+| **[PHASE_1.md](PHASE_1.md)** | Phase 1 task list — **complete**, delete when Phase 2 starts | While working the phase |
 | **[DECISIONS.md](DECISIONS.md)** | *Why* things are the way they are | Append-only, never edited |
 | **[CLAUDE.md](CLAUDE.md)** | Operating instructions for Claude Code | Rarely |
 
