@@ -179,10 +179,23 @@ SELECT * FROM unknown_type_log;
 
 ## Phase 0 Complete When
 
-- [ ] `data/optcg.db` exists and has cards
-- [ ] `SELECT COUNT(*) FROM cards` returns a realistic number (5000+)
-- [ ] At least one card with a printing variant exists (e.g. `_p1`)
-- [ ] `skipped_cards_log` and `unknown_type_log` reviewed
-- [ ] All code committed to git
+- [x] `data/optcg.db` exists and has cards
+- [x] `SELECT COUNT(*) FROM cards` returns a realistic number — 4338 printings
+      across 2656 unique `base_card_id`s, covering every card the API exposes
+      (OP01–OP16, EB01–EB04, ST01–ST30, PRB01–02, promos)
+- [x] At least one card with a printing variant exists — 1687 have one
+- [x] `skipped_cards_log` and `unknown_type_log` reviewed — both empty
+- [x] All code committed to git
+
+> **Note on card counts.** Three different numbers get confused here:
+> - **4459** — raw rows fetched (the same printing appears in more than one
+>   endpoint; deduplicated by `card_image_id`).
+> - **4338** — unique printings, the `cards` table. This is the *catalog*.
+> - **2656** — unique `base_card_id`s, i.e. distinct gameplay cards.
+>
+> A personal collection of 5000+ physical cards is a separate axis entirely —
+> it is inventory, stored in `collection` as a `quantity` per printing, and it
+> can exceed the catalog size because duplicates count. Do not use collection
+> size as a sanity check on catalog size.
 
 Ready for Phase 1.
