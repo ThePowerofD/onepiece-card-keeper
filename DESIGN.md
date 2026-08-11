@@ -3,8 +3,7 @@
 What the system **is**. For *why*, see [DECISIONS.md](DECISIONS.md).
 For status and how to run it, see [README.md](README.md).
 
-Describes what's **built**. Phase 1's additions are specced in
-[PHASE_1.md](PHASE_1.md) and move here once they exist.
+Describes what's **built** — Phase 0 and Phase 1 are both complete.
 
 > **The schema itself lives in `src/db_setup.py`** — that's the source of truth
 > and it's executable. This file explains the model, not the DDL.
@@ -110,6 +109,8 @@ every built deck reports as incomplete.
 erDiagram
     cards ||--o{ collection : "card_image_id"
     cards ||--o{ card_types : "base_card_id (no FK)"
+    cards ||--o{ collection_placements : "card_image_id"
+    storage_locations ||--o{ collection_placements : "location_id (cascade)"
     decks ||--o{ deck_cards : "deck_id (cascade)"
     deck_cards }o--|| cards : "base_card_id (no FK)"
 
@@ -133,6 +134,18 @@ erDiagram
         INTEGER id PK
         TEXT card_image_id FK
         INTEGER quantity "CHECK >= 0"
+        INTEGER foil_quantity "reserved, 0 in v1"
+    }
+    storage_locations {
+        INTEGER id PK
+        TEXT name "UNIQUE - 'Binder A'"
+        TEXT notes
+    }
+    collection_placements {
+        INTEGER id PK
+        TEXT card_image_id FK
+        INTEGER location_id FK
+        INTEGER quantity "where the loose copies are"
     }
     decks {
         INTEGER id PK
@@ -161,11 +174,34 @@ Plus four standalone tables: `known_types` (the type vocabulary),
 `cards` also carries five `has_*` keyword booleans (`trigger`, `blocker`, `rush`,
 `double_attack`, `banish`) and a `last_synced` timestamp.
 
-**11 indexes:** `cards` on `base_card_id`, `category`, `color`, `set_code` and
-each keyword boolean; `card_types` on `base_card_id` and `type_name`.
+**13 indexes:** `cards` on `base_card_id`, `category`, `color`, `set_code` and
+each keyword boolean; `card_types` on `base_card_id` and `type_name`;
+`collection_placements` on `card_image_id` and `location_id`.
+
+**One view, `available_cards`** — `owned`, `committed` and `available` per
+printing (D-009). It over-subtracts when you own several printings of one card,
+because commitment is gameplay-level and ownership is printing-level (D-003), so
+aggregate per `base_card_id` when asking "can I build this?".
 
 **Two absent foreign keys are deliberate** — `base_card_id` is non-unique by
 design and SQLite requires a UNIQUE/PK target. See D-006.
+
+### How the placement numbers relate
+
+`collection.quantity` is the single source of truth for how many you own.
+Placements only say where the copies that aren't sleeved are sitting:
+
+```
+owned    = collection.quantity
+in decks = Σ deck_cards.quantity for physical decks
+loose    = owned − in decks
+placed   = Σ collection_placements.quantity
+unplaced = loose − placed
+```
+
+`placed` exceeding `loose` **warns, never blocks** — placement is gradual
+bookkeeping across thousands of cards and must never gate recording ownership
+(D-019).
 
 ---
 
@@ -265,8 +301,8 @@ OP17. Not a bug in this code.
 | Phase | Description | Status |
 |---|---|---|
 | 0 | Data foundation — schema + OptcgAPI sync | ✅ Complete |
-| 1 | Collection + decks (CLI) — import, storage locations | ← current |
-| 2 | Deck completion & insights (CLI) — owned vs missing | |
+| 1 | Collection + decks (CLI) — import, storage locations | ✅ Complete |
+| 2 | Deck completion & insights (CLI) — owned vs missing | ← current |
 | 3 | Minimal UI (Tauri + React/Svelte) | |
 | 4 | Interactive deck builder | |
 | 5 | Images & polish — local cache, hover previews | |

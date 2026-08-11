@@ -10,10 +10,14 @@ Python CLI today. Becomes a Tauri + React desktop app in Phase 3.
 
 ## Where the project is right now
 
-**Last updated: 2026-08-11 — Phase 0 complete, Phase 1 planned but not started.**
+**Last updated: 2026-08-11 — Phases 0 and 1 complete.**
 
-The card database is built and populated. Nothing about a personal collection is
-entered yet — `collection`, `decks` and `deck_cards` are empty. That's Phase 1.
+The card database is built, and the full collection/deck CLI works: import
+Limitless decklists, track what you own at printing level, record where loose
+cards are stored, and see what's missing for a deck you want to build.
+
+Your own collection is still empty — start by importing the decks you've
+already sleeved (see *Using it* below), which populates the collection for free.
 
 | | |
 |---|---|
@@ -21,14 +25,15 @@ entered yet — `collection`, `decks` and `deck_cards` are empty. That's Phase 1
 | Unique gameplay cards (`base_card_id`) | 2,648 |
 | Sets covered | OP01–OP16, EB01–EB04, ST01–ST30, PRB01–02, promos |
 | Bad rows in logs | none |
-| Tests | 53 passing |
+| Tests | 246 passing |
 
 **Known limitation:** OptcgAPI lags the real game. The game is out to **OP17**;
 the API only has **OP16**. Re-run the sync when it catches up — no code change
 needed.
 
-**Next up:** Phase 1, tasks 1.1 → 1.8 in [PHASE_1.md](PHASE_1.md), in order.
-Start with 1.1 (schema additions). The design questions are already answered.
+**Next up:** Phase 2 — deck completion & insights. `deck show` already reports
+owned vs missing per card; Phase 2 adds cross-deck views, "what can I build",
+and richer filtering.
 
 ---
 
@@ -71,6 +76,44 @@ cache files to force a fresh fetch.
 
 ---
 
+## Using it
+
+Everything runs through one entry point. `--help` works at every level.
+
+```bash
+# Decks — importing a sleeved deck also credits your collection
+python -m src.cli deck import mydeck.txt --name "Red Luffy" --physical
+python -m src.cli deck import wanted.txt --name "Purple Doffy" --wishlist
+python -m src.cli deck list
+python -m src.cli deck show "Red Luffy"          # owned vs missing per card
+python -m src.cli deck set-physical "Purple Doffy"
+python -m src.cli deck delete "Red Luffy"        # collection untouched
+
+# Collection — quantities are per printing (OP05-097 vs OP05-097_p1)
+python -m src.cli collection add OP05-097_p1 3
+python -m src.cli collection set OP05-097 4
+python -m src.cli collection remove OP05-097 1
+python -m src.cli collection show OP05-097       # all printings, decks, locations
+python -m src.cli collection list --set OP-05 --owned-only
+
+# Storage — where the loose cards physically are
+python -m src.cli location add "Binder A" --notes "red decks"
+python -m src.cli location list
+python -m src.cli place OP05-097 "Binder A" 2
+python -m src.cli unplace OP05-097 "Binder A"
+```
+
+**A physical deck locks its cards** — they stop counting as available elsewhere.
+A wishlist deck locks nothing and reports what you're missing. Toggle with
+`deck set-physical`.
+
+**Import credits the base printing.** A decklist says `OP05-097` without saying
+which art is sleeved, so import assumes the plain printing. If you actually
+sleeved an alt art, fix it after: `collection set OP05-097 0` then
+`collection set OP05-097_p1 4`.
+
+---
+
 ## Layout
 
 ```
@@ -80,7 +123,13 @@ src/
   sanitize.py     pure cleaning functions, one per rule — no DB, no side effects
   known_types.py  seeds the card-type vocabulary
   sync.py         orchestrator: fetch → sanitize → upsert
-tests/
+  deck_parser.py  Limitless decklist format — pure, never raises
+  resolve.py      gameplay id → printings; picks the printing an import credits
+  collection.py   what you own, with the availability guard
+  storage.py      storage locations and placements
+  decks.py        deck import and management
+  cli.py          argparse entry point over all of the above
+tests/            246 tests
 data/             optcg.db and cache/ (both gitignored)
 ```
 

@@ -19,7 +19,7 @@ Depends on Phase 0. Model and schema: [DESIGN.md](DESIGN.md). Rationale:
 | 1.5 Storage location commands | **Done** — `storage.py`, tests in `tests/test_storage.py` |
 | 1.6 Deck import | **Done** — `decks.py`, tests in `tests/test_decks.py` |
 | 1.7 Deck management | **Done** — `decks.py`, tests in `tests/test_decks.py` |
-| 1.8 CLI entry point | Not started |
+| 1.8 CLI entry point | **Done** - `cli.py`, tests in `tests/test_cli.py` |
 
 **Decisions already made** (full reasoning in DECISIONS.md): import credits the
 variant-free base printing (D-016); a deck-name clash asks before replacing
@@ -229,13 +229,13 @@ python -m src.cli place OP05-097 "Binder A" 2
 
 ## Phase 1 complete when
 
-- [ ] A real decklist imports cleanly — deck + collection together
-- [ ] A wishlist deck imports without touching the collection
-- [ ] Loose cards can be placed across multiple storage locations
-- [ ] `available_cards` correctly shows cards locked in physical decks
-- [ ] Toggling `is_physical` moves cards between locked and free
-- [ ] `deck show` on a wishlist deck lists what's missing
-- [ ] Unknown ids warn without blocking
-- [ ] All commands reachable from `python -m src.cli`
-- [ ] Tests cover the parser, resolution, and availability math
-- [ ] Committed, and `DESIGN.md` updated with the three new tables
+- [x] A real decklist imports cleanly — deck + collection together
+- [x] A wishlist deck imports without touching the collection
+- [x] Loose cards can be placed across multiple storage locations
+- [x] `available_cards` correctly shows cards locked in physical decks
+- [x] Toggling `is_physical` moves cards between locked and free
+- [x] `deck show` on a wishlist deck lists what's missing
+- [x] Unknown ids warn without blocking
+- [x] All commands reachable from `python -m src.cli`
+- [x] Tests cover the parser, resolution, and availability math
+- [x] Committed, and `DESIGN.md` updated with the three new tables
