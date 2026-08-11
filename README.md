@@ -43,13 +43,14 @@ From a fresh clone to a working database:
 
 ```bash
 venv\Scripts\activate                 # Windows; source venv/bin/activate elsewhere
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-dev.txt
 
 python -m src.db_setup --reset        # create the schema (drops any existing DB)
 python -m src.known_types             # seed the card-type vocabulary
 python -m src.sync                    # fetch all cards from OptcgAPI
 
 python -m pytest tests/ -v
+python -m pytest tests/ --cov=src --cov-report=term-missing   # coverage (99%)
 ```
 
 **Verify it worked.** You should see:

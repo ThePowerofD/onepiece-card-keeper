@@ -236,3 +236,27 @@ class DeleteLocationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExtraStorageTests(unittest.TestCase):
+    def setUp(self):
+        self.conn = make_db()
+        add_location(self.conn, "Binder A")
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_rename_to_an_empty_name_refused(self):
+        with self.assertRaises(StorageError):
+            rename_location(self.conn, "Binder A", "   ")
+
+    def test_contents_respects_a_limit(self):
+        place(self.conn, "OP05-097", "Binder A", 1)
+        place(self.conn, "OP05-097_p1", "Binder A", 1)
+        self.assertEqual(len(contents(self.conn, "Binder A")), 2)
+        self.assertEqual(len(contents(self.conn, "Binder A", limit=1)), 1)
+
+    def test_contents_hides_zero_quantity_rows(self):
+        place(self.conn, "OP05-097", "Binder A", 2)
+        place(self.conn, "OP05-097", "Binder A", 0)
+        self.assertEqual(contents(self.conn, "Binder A"), [])

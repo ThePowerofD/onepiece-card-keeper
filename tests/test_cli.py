@@ -290,3 +290,30 @@ class StorageCommandTests(CliTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CliEdgeTests(CliTestCase):
+    def test_list_with_no_matches(self):
+        code, out, _ = self.run_cli("collection", "list", "--set", "ZZ-99")
+        self.assertEqual(code, 0)
+        self.assertIn("no cards matched", out)
+
+    def test_keyboard_interrupt_exits_cleanly(self):
+        with mock.patch("src.cli.cmd_deck_list", side_effect=KeyboardInterrupt):
+            code, _, err = self.run_cli("deck", "list")
+        self.assertEqual(code, 130)
+        self.assertIn("cancelled", err)
+
+    def test_unplace_without_a_quantity_removes_all(self):
+        self.run_cli("collection", "add", "OP05-001", "4")
+        self.run_cli("location", "add", "Binder A")
+        self.run_cli("place", "OP05-001", "Binder A", "3")
+        code, out, _ = self.run_cli("unplace", "OP05-001", "Binder A")
+        self.assertEqual(code, 0)
+        self.assertIn(": 0", out)
+
+    def test_deck_show_by_id(self):
+        self.run_cli("deck", "import", str(self.decklist), "--name", "Red", "--physical")
+        code, out, _ = self.run_cli("deck", "show", "1")
+        self.assertEqual(code, 0)
+        self.assertIn("Red", out)
