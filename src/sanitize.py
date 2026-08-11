@@ -119,6 +119,36 @@ def parse_subtypes(raw_string, known_types_list):
     return deduped, leftover
 
 
+def _is_bare_number(value):
+    return bool(re.fullmatch(r"\d+", str(value).strip()))
+
+
+def repair_field_shift(raw_power, raw_sub_types):
+    """Rule 9: repair upstream rows whose power and sub_types are misaligned.
+
+    A handful of OptcgAPI rows have fields shifted out of position, which shows
+    up as a bare number sitting in sub_types (a real sub_type is never numeric):
+
+        swap  — power holds the type text, sub_types holds the power
+                ('Sky Island', '1000') -> (1000, 'Sky Island')
+        shift — power holds an unrelated value and the real sub_types are gone
+                ('4', '5000')          -> (5000, None)
+
+    Returns (power, sub_types, was_repaired). Rows that look sane are returned
+    untouched, so healthy data never takes this path.
+    """
+    power = normalize_null(raw_power)
+    sub_types = normalize_null(raw_sub_types)
+
+    if sub_types is None or not _is_bare_number(sub_types):
+        return raw_power, raw_sub_types, False
+
+    recovered_power = to_int(sub_types)
+    if power is not None and to_int(power) is None:
+        return recovered_power, power, True
+    return recovered_power, None, True
+
+
 def extract_printing_variant(card_image_id):
     """Rule 7: 'OP05-097_p1' → 'p1'; 'OP05-097' → None."""
     cleaned = normalize_null(card_image_id)

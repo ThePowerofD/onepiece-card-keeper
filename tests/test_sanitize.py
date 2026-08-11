@@ -17,6 +17,7 @@ from src.sanitize import (
     normalize_counter,
     normalize_null,
     parse_subtypes,
+    repair_field_shift,
     to_int,
 )
 
@@ -139,6 +140,66 @@ class ParseSubtypesTests(unittest.TestCase):
         matched, leftover = parse_subtypes("Marine, Supernovas", self.KNOWN)
         self.assertEqual(set(matched), {"Marine", "Supernovas"})
         self.assertEqual(leftover, "")
+
+
+class RepairFieldShiftTests(unittest.TestCase):
+    def test_healthy_row_untouched(self):
+        power, sub_types, repaired = repair_field_shift("5000", "Animal Straw Hat Crew")
+        self.assertEqual(power, "5000")
+        self.assertEqual(sub_types, "Animal Straw Hat Crew")
+        self.assertFalse(repaired)
+
+    def test_healthy_row_with_no_power(self):
+        power, sub_types, repaired = repair_field_shift(None, "Straw Hat Crew")
+        self.assertIsNone(power)
+        self.assertEqual(sub_types, "Straw Hat Crew")
+        self.assertFalse(repaired)
+
+    def test_swap_recovers_both_fields(self):
+        # EB03-050 Conis: power holds the type text, sub_types holds the power
+        power, sub_types, repaired = repair_field_shift("Sky Island", "1000")
+        self.assertEqual(power, 1000)
+        self.assertEqual(sub_types, "Sky Island")
+        self.assertTrue(repaired)
+
+    def test_swap_multiword_type(self):
+        # EB03-009 Makino
+        power, sub_types, repaired = repair_field_shift("Windmill Village", "2000")
+        self.assertEqual(power, 2000)
+        self.assertEqual(sub_types, "Windmill Village")
+        self.assertTrue(repaired)
+
+    def test_shift_recovers_power_and_drops_lost_subtypes(self):
+        # OP08-001 Chopper: sub_types are gone from this row entirely
+        power, sub_types, repaired = repair_field_shift("4", "5000")
+        self.assertEqual(power, 5000)
+        self.assertIsNone(sub_types)
+        self.assertTrue(repaired)
+
+    def test_numeric_sub_types_with_missing_power(self):
+        power, sub_types, repaired = repair_field_shift(None, "3000")
+        self.assertEqual(power, 3000)
+        self.assertIsNone(sub_types)
+        self.assertTrue(repaired)
+
+    def test_integer_sub_types_are_detected(self):
+        power, sub_types, repaired = repair_field_shift("Sky Island", 1000)
+        self.assertEqual(power, 1000)
+        self.assertEqual(sub_types, "Sky Island")
+        self.assertTrue(repaired)
+
+    def test_null_like_sub_types_untouched(self):
+        for value in [None, "NULL", "?", "", "-"]:
+            power, sub_types, repaired = repair_field_shift("5000", value)
+            self.assertEqual(power, "5000", msg=repr(value))
+            self.assertEqual(sub_types, value, msg=repr(value))
+            self.assertFalse(repaired, msg=repr(value))
+
+    def test_type_containing_a_number_is_not_treated_as_bare(self):
+        power, sub_types, repaired = repair_field_shift("5000", "Baroque Works 13")
+        self.assertEqual(power, "5000")
+        self.assertEqual(sub_types, "Baroque Works 13")
+        self.assertFalse(repaired)
 
 
 class ExtractPrintingVariantTests(unittest.TestCase):

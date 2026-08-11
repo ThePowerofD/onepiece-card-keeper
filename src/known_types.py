@@ -19,6 +19,7 @@ SEED_TYPES: list[str] = [
     # Core factions (API uses "The" prefix variants)
     "Marine",
     "Navy",
+    "Admiral",
     "Revolutionary Army",
     "Cipher Pol",
     "CP0",
