@@ -12,7 +12,7 @@ Depends on Phase 0. Model and schema: [DESIGN.md](DESIGN.md). Rationale:
 
 | Task | Status |
 |---|---|
-| 1.1 Schema additions | Not started |
+| 1.1 Schema additions | **Done** — `db_setup.py`, tests in `tests/test_schema.py` |
 | 1.2 Limitless decklist parser | Not started |
 | 1.3 Card resolution | Not started |
 | 1.4 Collection commands | Not started |
