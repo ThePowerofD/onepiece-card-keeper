@@ -88,19 +88,17 @@ data/             optcg.db and cache/ (both gitignored)
 
 ## Documentation
 
-Four files, each with one job. Nothing is documented in two places.
+Five files, each with one job. Nothing is documented in two places.
 
 | File | What it's for | How often it changes |
 |---|---|---|
 | **README.md** | This file — what it is, where it stands, how to run it | Every session |
-| **[DESIGN.md](DESIGN.md)** | Schema, data model, sanitization rules, API reference | When the system changes |
-| **[PHASE_1.md](PHASE_1.md)** | Current phase task list | While working the phase |
-| **[notes/DECISIONS.md](notes/DECISIONS.md)** | *Why* things are the way they are | Append-only, never edited |
+| **[DESIGN.md](DESIGN.md)** | What **exists** — model, schema, rules, API | When the system changes |
+| **[PHASE_1.md](PHASE_1.md)** | What **doesn't exist yet** — current phase tasks | While working the phase |
+| **[DECISIONS.md](DECISIONS.md)** | *Why* things are the way they are | Append-only, never edited |
+| **[CLAUDE.md](CLAUDE.md)** | Operating instructions for Claude Code | Rarely |
 
-Plus [notes/foil_and_printing_variants.md](notes/foil_and_printing_variants.md)
-— what the printing suffixes and foil treatments in the card data actually mean.
-
-**If you're picking this up cold:** read this file, then `notes/DECISIONS.md`.
+**If you're picking this up cold:** read this file, then `DECISIONS.md`.
 The decision log answers "why is this weird?", which is the question that costs
 the most time and the one the code can't answer.
 

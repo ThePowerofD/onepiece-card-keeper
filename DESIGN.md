@@ -1,6 +1,6 @@
 # Design Reference
 
-What the system **is**. For *why*, see [notes/DECISIONS.md](notes/DECISIONS.md).
+What the system **is**. For *why*, see [DECISIONS.md](DECISIONS.md).
 For status and how to run it, see [README.md](README.md).
 
 Describes what's **built**. Phase 1's additions are specced in
@@ -46,6 +46,31 @@ The most important distinction in the project:
 
 Every printing of a card shares one `base_card_id`. A decklist never says which
 printing is sleeved, because in the game they're identical.
+
+### Printing variants
+
+1,690 of the 4,338 printings carry a suffix, in three families: `_p1`–`_p8`
+(1,106, alternate printings), `_r1`–`_r3` (328, reprints), `_pr1`–`_pr9` (256,
+promos).
+
+> **The number is an index, not a treatment.** `_p1` means "the first alternate
+> printing of this card" and nothing more — what it actually *is* varies:
+>
+> ```
+> EB01-009_p1   Just Shut Up and Come with Us!!!! (Pirate Foil)
+> OP01-001_p1   Roronoa Zoro (001) (Parallel)
+> OP01-008_p1   Cavendish (Box Topper)
+> EB01-023_p1   Edward Weevil - EB01-023 (SP)
+> ```
+>
+> The card's **name** is the only reliable indicator of the treatment. They also
+> stack: `EB01-006_p2` is "Tony Tony.Chopper (Alternate Art) (Manga)".
+
+Only 170 printings say "Foil" outright (Pirate Foil 80, Jolly Roger Foil 68,
+Textured Foil 22). Most premium treatments are foil without saying so — Alternate
+Art (476), Reprint (249), Parallel (180), SP (108), Full Art (72), Manga (40),
+SPR (26). Because these each get their own `card_image_id`, **the printing
+already encodes the foil**, which is why `foil_quantity` stays 0 (D-018).
 
 **Availability is computed, never stored:**
 
@@ -261,7 +286,6 @@ price history, multiple physical owners.
 
 **Hook exists:** local image cache (Phase 5), auto-detection of new sub-types
 (currently a manual `unknown_type_log` review), foil-vs-non-foil usage
-(`foil_quantity` lands in Phase 1 but stays 0 — see
-[notes/foil_and_printing_variants.md](notes/foil_and_printing_variants.md)).
+(`foil_quantity` lands in Phase 1 but stays 0 — see §3 "Printing variants").
 
 **Never:** hosting, multi-user, auth, condition/grading, playtesting/simulation.

@@ -8,7 +8,7 @@ what the system *is*, read the docs below rather than restating them here.
 1. [README.md](README.md) — current state and how to run it
 2. [PHASE_1.md](PHASE_1.md) — what we're building now
 3. [DESIGN.md](DESIGN.md) — schema, data model, sanitization rules, API reference
-4. [notes/DECISIONS.md](notes/DECISIONS.md) — why things are the way they are
+4. [DECISIONS.md](DECISIONS.md) — why things are the way they are
 
 ## Commands
 
@@ -30,7 +30,7 @@ python -m pytest tests/test_sanitize.py::ToIntTests
   `unknown_type_log` — never raise on third-party data.
 - **Sync is idempotent.** Running it twice must not duplicate anything.
 - **Update docs in the same commit as the behavior they describe.**
-- **`notes/DECISIONS.md` is append-only.** Never edit an entry; supersede it.
+- **`DECISIONS.md` is append-only.** Never edit an entry; supersede it.
 - Commit messages: short imperative summary, no body.
 
 ## Gotchas

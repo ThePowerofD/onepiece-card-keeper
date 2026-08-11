@@ -318,7 +318,7 @@ empty, and adding it after 5000+ cards are entered would need a migration. It's 
 reserve for the one case this data can't express — the *same* printing existing
 as both foil and non-foil.
 
-See [foil_and_printing_variants.md](foil_and_printing_variants.md).
+See "Printing variants" in [DESIGN.md](DESIGN.md) §3.
 
 ---
 
@@ -350,10 +350,16 @@ an `available_cards` view existed when neither ever had. It failed because it wa
 orientation, reference and decision log in one file, so no part could be
 maintained on its own schedule.
 
-Now six files, each differing from every other on lifecycle, mutability, access
-pattern or audience: `README` (front door), `DESIGN` (what exists), `PHASE_N`
-(what doesn't yet), `CLAUDE.md` (agent instructions), `notes/DECISIONS.md` (why),
-`notes/foil_and_printing_variants.md` (card-data domain).
+Now five files, flat at the repo root, each differing from every other on
+lifecycle, mutability, access pattern or audience: `README` (front door),
+`DESIGN` (what exists), `PHASE_N` (what doesn't yet), `CLAUDE.md` (agent
+instructions), `DECISIONS.md` (why).
+
+A sixth file of card-data domain notes was cut the same day: it was the one file
+whose separation rested on preference rather than any of those four properties.
+Its load-bearing content — that a printing suffix is an index, not a treatment —
+folded into `DESIGN.md` §3 in a fifth of the space. The `notes/` folder went with
+it once only one file remained inside.
 
 The load-bearing rule: **built and planned must never share a file.** Once a
 reader can't tell which parts are real, none of it is trustworthy.

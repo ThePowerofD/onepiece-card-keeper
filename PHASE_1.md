@@ -8,7 +8,7 @@ storage, and see what's free to build with. No UI — Phase 3 replaces the CLI w
 windows, calling the same logic.
 
 Depends on Phase 0. Model and schema: [DESIGN.md](DESIGN.md). Rationale:
-[notes/DECISIONS.md](notes/DECISIONS.md).
+[DECISIONS.md](DECISIONS.md).
 
 | Task | Status |
 |---|---|
