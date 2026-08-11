@@ -16,7 +16,7 @@ Depends on Phase 0. Model and schema: [DESIGN.md](DESIGN.md). Rationale:
 | 1.2 Limitless decklist parser | **Done** — `deck_parser.py`, tests in `tests/test_deck_parser.py` |
 | 1.3 Card resolution | **Done** — `resolve.py`, tests in `tests/test_resolve.py` |
 | 1.4 Collection commands | **Done** — `collection.py`, tests in `tests/test_collection.py` |
-| 1.5 Storage location commands | Not started |
+| 1.5 Storage location commands | **Done** — `storage.py`, tests in `tests/test_storage.py` |
 | 1.6 Deck import | Not started |
 | 1.7 Deck management | Not started |
 | 1.8 CLI entry point | Not started |
