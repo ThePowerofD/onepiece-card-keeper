@@ -18,11 +18,13 @@ from src.db_setup import DB_PATH, connect
 from src.sanitize import (
     detect_keywords,
     extract_printing_variant,
+    normalize_card_image_id,
     normalize_colors,
     normalize_counter,
     normalize_null,
     parse_subtypes,
     repair_field_shift,
+    strip_printing_suffix,
     to_int,
 )
 
@@ -57,11 +59,11 @@ def load_known_types(conn: sqlite3.Connection) -> list[str]:
 def sanitize_row(row: dict, known_types: list[str], now: str) -> dict | None:
     """Return sanitized column values, or None if the row should be skipped."""
     raw_image_id = pick(row, "card_image_id")
-    card_image_id = normalize_null(raw_image_id)
+    card_image_id = normalize_card_image_id(raw_image_id)
     if card_image_id is None:
         return None
 
-    base_card_id = normalize_null(pick(row, "card_id")) or card_image_id.split("_")[0]
+    base_card_id = strip_printing_suffix(pick(row, "card_id")) or strip_printing_suffix(card_image_id)
     category = normalize_null(pick(row, "category"))
 
     keywords = detect_keywords(pick(row, "card_text"))

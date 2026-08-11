@@ -19,7 +19,9 @@ KEYWORD_PATTERNS = {
     "has_banish": re.compile(r"\[Banish\]", re.IGNORECASE),
 }
 
-PRINTING_VARIANT_RE = re.compile(r"_([a-zA-Z]+\d+)$")
+PRINTING_VARIANT_RE = re.compile(r"[_-]([a-zA-Z]+\d+)$")
+
+FILE_EXT_RE = re.compile(r"\.(jpg|jpeg|png|webp)$", re.IGNORECASE)
 
 
 def normalize_null(value):
@@ -147,6 +149,36 @@ def repair_field_shift(raw_power, raw_sub_types):
     if power is not None and to_int(power) is None:
         return recovered_power, power, True
     return recovered_power, None, True
+
+
+def normalize_card_image_id(value):
+    """Rule 10: canonicalise the printing key.
+
+    `card_image_id` is the primary key for a printing and the column the
+    collection references, so it has to be stable. A few API rows carry the
+    image filename instead ('EB02-052_p2.jpg') or separate the variant with a
+    hyphen ('OP09-078-r1'). Both fold to the canonical '<base>_<variant>' form.
+    """
+    cleaned = normalize_null(value)
+    if cleaned is None:
+        return None
+    cleaned = FILE_EXT_RE.sub("", str(cleaned))
+    m = PRINTING_VARIANT_RE.search(cleaned)
+    if m:
+        cleaned = f"{cleaned[:m.start()]}_{m.group(1)}"
+    return cleaned
+
+
+def strip_printing_suffix(card_id):
+    """Rule 11: 'P-029_r1' → 'P-029'; 'OP05-097' → 'OP05-097'.
+
+    `base_card_id` is the gameplay identity — every printing of a card must
+    share it, or deck lookups silently miss the printings you actually own.
+    """
+    cleaned = normalize_null(card_id)
+    if cleaned is None:
+        return None
+    return PRINTING_VARIANT_RE.sub("", str(cleaned))
 
 
 def extract_printing_variant(card_image_id):
