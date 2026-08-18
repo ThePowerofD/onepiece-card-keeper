@@ -19,7 +19,9 @@ KEYWORD_PATTERNS = {
     "has_banish": re.compile(r"\[Banish\]", re.IGNORECASE),
 }
 
-PRINTING_VARIANT_RE = re.compile(r"_([a-zA-Z]+\d+)$")
+PRINTING_VARIANT_RE = re.compile(r"[_-]([a-zA-Z]+\d+)$")
+
+FILE_EXT_RE = re.compile(r"\.(jpg|jpeg|png|webp)$", re.IGNORECASE)
 
 
 def normalize_null(value):
@@ -117,6 +119,66 @@ def parse_subtypes(raw_string, known_types_list):
             seen.add(m)
             deduped.append(m)
     return deduped, leftover
+
+
+def _is_bare_number(value):
+    return bool(re.fullmatch(r"\d+", str(value).strip()))
+
+
+def repair_field_shift(raw_power, raw_sub_types):
+    """Rule 9: repair upstream rows whose power and sub_types are misaligned.
+
+    A handful of OptcgAPI rows have fields shifted out of position, which shows
+    up as a bare number sitting in sub_types (a real sub_type is never numeric):
+
+        swap  — power holds the type text, sub_types holds the power
+                ('Sky Island', '1000') -> (1000, 'Sky Island')
+        shift — power holds an unrelated value and the real sub_types are gone
+                ('4', '5000')          -> (5000, None)
+
+    Returns (power, sub_types, was_repaired). Rows that look sane are returned
+    untouched, so healthy data never takes this path.
+    """
+    power = normalize_null(raw_power)
+    sub_types = normalize_null(raw_sub_types)
+
+    if sub_types is None or not _is_bare_number(sub_types):
+        return raw_power, raw_sub_types, False
+
+    recovered_power = to_int(sub_types)
+    if power is not None and to_int(power) is None:
+        return recovered_power, power, True
+    return recovered_power, None, True
+
+
+def normalize_card_image_id(value):
+    """Rule 10: canonicalise the printing key.
+
+    `card_image_id` is the primary key for a printing and the column the
+    collection references, so it has to be stable. A few API rows carry the
+    image filename instead ('EB02-052_p2.jpg') or separate the variant with a
+    hyphen ('OP09-078-r1'). Both fold to the canonical '<base>_<variant>' form.
+    """
+    cleaned = normalize_null(value)
+    if cleaned is None:
+        return None
+    cleaned = FILE_EXT_RE.sub("", str(cleaned))
+    m = PRINTING_VARIANT_RE.search(cleaned)
+    if m:
+        cleaned = f"{cleaned[:m.start()]}_{m.group(1)}"
+    return cleaned
+
+
+def strip_printing_suffix(card_id):
+    """Rule 11: 'P-029_r1' → 'P-029'; 'OP05-097' → 'OP05-097'.
+
+    `base_card_id` is the gameplay identity — every printing of a card must
+    share it, or deck lookups silently miss the printings you actually own.
+    """
+    cleaned = normalize_null(card_id)
+    if cleaned is None:
+        return None
+    return PRINTING_VARIANT_RE.sub("", str(cleaned))
 
 
 def extract_printing_variant(card_image_id):

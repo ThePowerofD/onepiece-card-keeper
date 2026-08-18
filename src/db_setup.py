@@ -74,8 +74,27 @@ TABLES: list[str] = [
         id             INTEGER PRIMARY KEY AUTOINCREMENT,
         card_image_id  TEXT NOT NULL REFERENCES cards(card_image_id),
         quantity       INTEGER NOT NULL DEFAULT 0 CHECK(quantity >= 0),
+        foil_quantity  INTEGER NOT NULL DEFAULT 0 CHECK(foil_quantity >= 0),
         updated_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(card_image_id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS storage_locations (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        name       TEXT NOT NULL UNIQUE,
+        notes      TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS collection_placements (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        card_image_id TEXT NOT NULL REFERENCES cards(card_image_id),
+        location_id   INTEGER NOT NULL REFERENCES storage_locations(id) ON DELETE CASCADE,
+        quantity      INTEGER NOT NULL DEFAULT 0 CHECK(quantity >= 0),
+        updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(card_image_id, location_id)
     )
     """,
     """
@@ -118,11 +137,42 @@ INDEXES: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_cards_banish ON cards(has_banish)",
     "CREATE INDEX IF NOT EXISTS idx_card_types_base_card_id ON card_types(base_card_id)",
     "CREATE INDEX IF NOT EXISTS idx_card_types_type_name ON card_types(type_name)",
+    "CREATE INDEX IF NOT EXISTS idx_placements_card ON collection_placements(card_image_id)",
+    "CREATE INDEX IF NOT EXISTS idx_placements_location ON collection_placements(location_id)",
 ]
 
+# Availability is computed, never stored (D-009). Committed quantity is
+# gameplay-level while ownership is printing-level (D-003), so this view
+# over-subtracts when several printings of one card are owned — aggregate per
+# base_card_id when answering "can I build this?".
+VIEWS: list[str] = [
+    """
+    CREATE VIEW IF NOT EXISTS available_cards AS
+    SELECT c.card_image_id,
+           c.base_card_id,
+           col.quantity                              AS owned,
+           COALESCE(committed.qty, 0)                AS committed,
+           col.quantity - COALESCE(committed.qty, 0) AS available
+    FROM cards c
+    JOIN collection col ON col.card_image_id = c.card_image_id
+    LEFT JOIN (
+        SELECT dc.base_card_id, SUM(dc.quantity) AS qty
+        FROM deck_cards dc
+        JOIN decks d ON d.id = dc.deck_id
+        WHERE d.is_physical = 1
+        GROUP BY dc.base_card_id
+    ) committed ON committed.base_card_id = c.base_card_id
+    """,
+]
+
+VIEW_NAMES = ["available_cards"]
+
+# Drop order: children before parents, so foreign keys never block a reset.
 TABLE_NAMES = [
     "deck_cards",
     "decks",
+    "collection_placements",
+    "storage_locations",
     "collection",
     "skipped_cards_log",
     "unknown_type_log",
@@ -141,6 +191,8 @@ def connect(db_path: Path = DB_PATH) -> sqlite3.Connection:
 
 
 def drop_all(conn: sqlite3.Connection) -> None:
+    for name in VIEW_NAMES:
+        conn.execute(f"DROP VIEW IF EXISTS {name}")
     for name in TABLE_NAMES:
         conn.execute(f"DROP TABLE IF EXISTS {name}")
     conn.commit()
@@ -150,6 +202,8 @@ def create_schema(conn: sqlite3.Connection) -> None:
     for stmt in TABLES:
         conn.execute(stmt)
     for stmt in INDEXES:
+        conn.execute(stmt)
+    for stmt in VIEWS:
         conn.execute(stmt)
     conn.commit()
 
@@ -179,7 +233,11 @@ def main() -> None:
         tables = [r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
         )]
+        views = [r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='view' ORDER BY name"
+        )]
         print(f"Tables present: {', '.join(tables)}")
+        print(f"Views present: {', '.join(views)}")
     finally:
         conn.close()
 

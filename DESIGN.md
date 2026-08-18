@@ -1,311 +1,327 @@
-# One Piece TCG Collection Manager & Deck Builder — Design Document
+# Design Reference
 
-> **Status:** Phase 0 complete. Schema locked. Ready for Phase 1.
-> **Last updated:** Design conversation, May 2026.
+What the system **is**. For *why*, see [DECISIONS.md](DECISIONS.md).
+For status and how to run it, see [README.md](README.md).
 
-This document is the source of truth for the project. Always load this into Claude Code at the start of every session.
+Describes what's **built** — Phase 0 and Phase 1 are both complete.
+
+> **The schema itself lives in `src/db_setup.py`** — that's the source of truth
+> and it's executable. This file explains the model, not the DDL.
 
 ---
 
-## 1. Project Goals
+## 1. Goals
 
-Build a personal-use desktop app to manage a One Piece TCG collection and decks. Specifically:
-
-- Track total card inventory at the printing level (base art, alt arts, reprints all distinct).
+- Track inventory at **printing level** — base art, alt arts and reprints are distinct.
 - Import decks from Limitless TCG paste format.
-- Distinguish cards committed to physical (sleeved) decks from cards available to use.
-- Filter and search the collection to build new decks, optionally constrained to owned cards.
-- Show deck completion status (owned vs missing) for any deck list.
-- Shareable as a downloadable app to friends — not hosted, not multi-user.
+- Distinguish cards locked in sleeved decks from cards free to use.
+- Show deck completion (owned vs missing) for any decklist, including decks you can't yet build.
+- Shareable as a downloadable app — not hosted, not multi-user.
 
-**Non-goals (v1):** condition/grading tracking, price-history tracking, public hosting, multi-user accounts, Japanese-language card support.
-
----
-
-## 2. Tech Stack
-
-| Layer | Choice | Reasoning |
-|---|---|---|
-| App shell | Tauri | Small binaries (~10 MB vs Electron 100+ MB), native webview, easy to share as installer |
-| UI framework | React (or Svelte — decide at Phase 3) | Standard, well-supported |
-| Local DB | SQLite | Single-file, fast, perfect for offline desktop app |
-| Sync script | Python | Easier for data work; sync runs separately from the UI |
-| Card data source | OptcgAPI | Free, community-maintained, covers all sets and promos |
+**Non-goals (v1):** condition/grading, price history, hosting, multi-user, Japanese cards.
 
 ---
 
-## 3. Core Mental Model
+## 2. Tech stack
 
-**Collection = total physical inventory**, tracked at printing level.
-- "I own 3 copies of OP05-097" and "I own 2 copies of OP05-097_p1" are separate rows.
-- Collection quantity = all copies you own, regardless of whether they're in a deck.
-
-**Availability is computed, not stored:**
-- `available = collection.quantity - SUM(deck_cards.quantity WHERE deck.is_physical = TRUE)`
-- A card is "locked" when committed to a physical sleeved deck.
-
-**Decks are tracked at the gameplay card level** (base card ID), not printing level.
-- A deck says "4x Monkey D. Luffy OP05-097" — it doesn't care which printing is sleeved.
-- The app resolves availability against whichever printings you own.
-
-**Collection lifecycle (Option A):** When quantity drops to zero, keep the row with quantity = 0. Never delete collection rows. This preserves history and makes re-adding easy.
-
-**UI safety rule:** If editing a collection quantity would make available copies go negative (i.e., more committed to decks than you'd own), the UI must warn and block the save.
-
----
-
-## 4. Deck Import Format (Limitless TCG)
-
-```
-Leader: 1 Monkey D. Luffy OP05-001
-DON!!: x10
-Character:
-4 Monkey D. Luffy OP05-097
-3 Roronoa Zoro OP05-020
-...
-Event:
-2 Gum-Gum Giant OP05-060
-...
-Stage:
-1 Thousand Sunny OP05-080
-```
-
-Parser rules:
-- Strip the `Leader:`, `DON!!:`, `Character:`, `Event:`, `Stage:` section headers.
-- Ignore `DON!!` line entirely.
-- Each card line: `{quantity} {card_name} {card_id}`
-- Match by `card_id` (base card ID) against the `cards` table.
-- Unmatched cards → warn user, don't block import.
-
----
-
-## 5. Phases
-
-| Phase | Description |
+| Layer | Choice |
 |---|---|
-| 0 | Setup & data foundation — SQLite schema + OptcgAPI sync script |
-| 1 | Collection + decks (CLI) — import decks, track collection quantities |
-| 2 | Deck completion & insights (CLI) — owned vs missing, availability |
-| 3 | Minimal UI (Tauri + React) — replace CLI with windows |
-| 4 | Interactive deck builder — build decks inside the app |
-| 5 | Images & polish |
-| 6+ | Future ideas |
+| App shell | Tauri |
+| UI | React or Svelte — decided at Phase 3 |
+| Database | SQLite |
+| Sync + CLI | Python |
+| Card data | OptcgAPI (`https://optcgapi.com`, override with `OPTCG_API_BASE`) |
 
 ---
 
-## 6. Working Principles
+## 3. Core mental model
 
-- **Schema first.** Don't write application code until the schema is right.
-- **CLI before UI.** Validate logic in Python before building Tauri/React.
-- **Log don't crash.** Bad API rows go to log tables, not exceptions.
-- **Idempotent sync.** Running the sync twice should not duplicate data.
-- **No DON cards.** Do not call `/api/allDonCards/`. DON!! cards excluded from v1.
+The most important distinction in the project:
+
+| | Keyed on | Example | Used by |
+|---|---|---|---|
+| **Printing** | `card_image_id` | `OP05-097_p1` | Collection — the physical card in your binder |
+| **Gameplay card** | `base_card_id` | `OP05-097` | Decks — the card as the rules see it |
+
+Every printing of a card shares one `base_card_id`. A decklist never says which
+printing is sleeved, because in the game they're identical.
+
+### Printing variants
+
+1,690 of the 4,338 printings carry a suffix, in three families: `_p1`–`_p8`
+(1,106, alternate printings), `_r1`–`_r3` (328, reprints), `_pr1`–`_pr9` (256,
+promos).
+
+> **The number is an index, not a treatment.** `_p1` means "the first alternate
+> printing of this card" and nothing more — what it actually *is* varies:
+>
+> ```
+> EB01-009_p1   Just Shut Up and Come with Us!!!! (Pirate Foil)
+> OP01-001_p1   Roronoa Zoro (001) (Parallel)
+> OP01-008_p1   Cavendish (Box Topper)
+> EB01-023_p1   Edward Weevil - EB01-023 (SP)
+> ```
+>
+> The card's **name** is the only reliable indicator of the treatment. They also
+> stack: `EB01-006_p2` is "Tony Tony.Chopper (Alternate Art) (Manga)".
+
+Only 170 printings say "Foil" outright (Pirate Foil 80, Jolly Roger Foil 68,
+Textured Foil 22). Most premium treatments are foil without saying so — Alternate
+Art (476), Reprint (249), Parallel (180), SP (108), Full Art (72), Manga (40),
+SPR (26). Because these each get their own `card_image_id`, **the printing
+already encodes the foil**, which is why `foil_quantity` stays 0 (D-018).
+
+**Availability is computed, never stored:**
+
+```
+available = collection.quantity − SUM(deck_cards.quantity WHERE decks.is_physical)
+```
+
+**Collection lifecycle:** when quantity hits zero, keep the row at 0. Never delete.
+
+**Safety rule:** if a change would make available copies negative, warn and refuse.
+
+### Availability has three forms
+
+Which one you want depends on the question:
+
+```
+1. "What's free right now?"                    (collection browser, new decks)
+   available = owned − Σ(all physical decks)
+
+2. "Can I build this specific deck?"           (deck completion view)
+   available_to_X = owned − Σ(OTHER physical decks)
+   missing        = max(0, needed − available_to_X)
+   ← the deck's own cards count as available to itself
+
+3. "If I broke down deck B, could I build X?"  (Phase 6+)
+   available_to_X = owned − Σ(OTHER physical decks EXCEPT B)
+```
+
+Form 2 is the subtle one — forget that a deck's own cards count toward itself and
+every built deck reports as incomplete.
 
 ---
 
-## 7. Database Schema
+## 4. Schema
 
-### `cards` — one row per printing
+```mermaid
+erDiagram
+    cards ||--o{ collection : "card_image_id"
+    cards ||--o{ card_types : "base_card_id (no FK)"
+    cards ||--o{ collection_placements : "card_image_id"
+    storage_locations ||--o{ collection_placements : "location_id (cascade)"
+    decks ||--o{ deck_cards : "deck_id (cascade)"
+    deck_cards }o--|| cards : "base_card_id (no FK)"
 
-```sql
-CREATE TABLE cards (
-    card_image_id      TEXT PRIMARY KEY,           -- e.g. "OP05-097_p1" or "OP05-097"
-    base_card_id       TEXT NOT NULL,              -- e.g. "OP05-097" (gameplay identity)
-    printing_variant   TEXT,                       -- e.g. "p1", "p2"; NULL for base print
-    name               TEXT NOT NULL,
-    category           TEXT NOT NULL,              -- "Leader", "Character", "Event", "Stage"
-    cost               INTEGER,                    -- NULL for Leaders
-    power              INTEGER,
-    counter            INTEGER,                    -- raw int for Characters; NULL forced for Leaders/Events/Stages
-    color              TEXT,                       -- e.g. "Red", "Blue/Red"
-    card_type          TEXT,                       -- raw sub_types string from API
-    effect             TEXT,                       -- card text; NULL allowed (vanilla cards)
-    has_trigger        BOOLEAN NOT NULL DEFAULT 0,
-    has_blocker        BOOLEAN NOT NULL DEFAULT 0,
-    has_rush           BOOLEAN NOT NULL DEFAULT 0,
-    has_double_attack  BOOLEAN NOT NULL DEFAULT 0,
-    has_banish         BOOLEAN NOT NULL DEFAULT 0,
-    set_code           TEXT,                       -- e.g. "OP-05"
-    rarity             TEXT,
-    image_url          TEXT,
-    last_synced        TIMESTAMP
-);
-
-CREATE INDEX idx_cards_base_card_id ON cards(base_card_id);
-CREATE INDEX idx_cards_category ON cards(category);
-CREATE INDEX idx_cards_color ON cards(color);
-CREATE INDEX idx_cards_set_code ON cards(set_code);
-CREATE INDEX idx_cards_trigger ON cards(has_trigger);
-CREATE INDEX idx_cards_blocker ON cards(has_blocker);
-CREATE INDEX idx_cards_rush ON cards(has_rush);
-CREATE INDEX idx_cards_double_attack ON cards(has_double_attack);
-CREATE INDEX idx_cards_banish ON cards(has_banish);
+    cards {
+        TEXT card_image_id PK "OP05-097_p1 — the printing"
+        TEXT base_card_id "OP05-097 — gameplay identity"
+        TEXT printing_variant "p1, or NULL for base"
+        TEXT name
+        TEXT category "Leader/Character/Event/Stage"
+        INTEGER cost "NULL for Leaders"
+        INTEGER power
+        INTEGER counter "NULL for non-Characters"
+        TEXT color "Blue/Red"
+        TEXT card_type "raw sub_types string"
+        TEXT effect "NULL for vanilla cards"
+        TEXT set_code
+        TEXT rarity
+        TEXT image_url
+    }
+    collection {
+        INTEGER id PK
+        TEXT card_image_id FK
+        INTEGER quantity "CHECK >= 0"
+        INTEGER foil_quantity "reserved, 0 in v1"
+    }
+    storage_locations {
+        INTEGER id PK
+        TEXT name "UNIQUE - 'Binder A'"
+        TEXT notes
+    }
+    collection_placements {
+        INTEGER id PK
+        TEXT card_image_id FK
+        INTEGER location_id FK
+        INTEGER quantity "where the loose copies are"
+    }
+    decks {
+        INTEGER id PK
+        TEXT name
+        TEXT leader_id "base_card_id, no FK"
+        BOOLEAN is_physical "TRUE = sleeved, locks cards"
+        TEXT notes
+    }
+    deck_cards {
+        INTEGER id PK
+        INTEGER deck_id FK
+        TEXT base_card_id "gameplay level"
+        INTEGER quantity "CHECK > 0"
+    }
+    card_types {
+        INTEGER id PK
+        TEXT base_card_id
+        TEXT type_name
+    }
 ```
 
-### `card_types` — normalized sub_types (one row per type per card)
+Plus four standalone tables: `known_types` (the type vocabulary),
+`unknown_type_log` and `skipped_cards_log` (sync review queues), and
+`app_settings` (key/value config).
 
-```sql
-CREATE TABLE card_types (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    base_card_id TEXT NOT NULL,   -- links to cards.base_card_id (not printing-specific)
-    type_name    TEXT NOT NULL,
-    UNIQUE(base_card_id, type_name)
-);
+`cards` also carries five `has_*` keyword booleans (`trigger`, `blocker`, `rush`,
+`double_attack`, `banish`) and a `last_synced` timestamp.
 
-CREATE INDEX idx_card_types_base_card_id ON card_types(base_card_id);
-CREATE INDEX idx_card_types_type_name ON card_types(type_name);
+**13 indexes:** `cards` on `base_card_id`, `category`, `color`, `set_code` and
+each keyword boolean; `card_types` on `base_card_id` and `type_name`;
+`collection_placements` on `card_image_id` and `location_id`.
+
+**One view, `available_cards`** — `owned`, `committed` and `available` per
+printing (D-009). It over-subtracts when you own several printings of one card,
+because commitment is gameplay-level and ownership is printing-level (D-003), so
+aggregate per `base_card_id` when asking "can I build this?".
+
+**Two absent foreign keys are deliberate** — `base_card_id` is non-unique by
+design and SQLite requires a UNIQUE/PK target. See D-006.
+
+### How the placement numbers relate
+
+`collection.quantity` is the single source of truth for how many you own.
+Placements only say where the copies that aren't sleeved are sitting:
+
+```
+owned    = collection.quantity
+in decks = Σ deck_cards.quantity for physical decks
+loose    = owned − in decks
+placed   = Σ collection_placements.quantity
+unplaced = loose − placed
 ```
 
-### `known_types` — canonical type list for sub_types parsing
-
-```sql
-CREATE TABLE known_types (
-    type_name   TEXT PRIMARY KEY,
-    added_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-### `unknown_type_log` — review queue for unparseable sub_types
-
-```sql
-CREATE TABLE unknown_type_log (
-    log_id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    card_image_id   TEXT NOT NULL,
-    raw_sub_types   TEXT NOT NULL,
-    detected_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    resolved        BOOLEAN NOT NULL DEFAULT 0
-);
-```
-
-### `skipped_cards_log` — cards skipped during sync
-
-```sql
-CREATE TABLE skipped_cards_log (
-    log_id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    raw_card_data   TEXT,          -- JSON of the raw API row
-    reason          TEXT NOT NULL, -- e.g. "missing card_image_id"
-    detected_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-### `collection` — physical card inventory
-
-```sql
-CREATE TABLE collection (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    card_image_id  TEXT NOT NULL REFERENCES cards(card_image_id),
-    quantity       INTEGER NOT NULL DEFAULT 0 CHECK(quantity >= 0),
-    updated_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(card_image_id)
-);
-```
-
-### `decks` — deck metadata
-
-```sql
-CREATE TABLE decks (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    name         TEXT NOT NULL,
-    leader_id    TEXT,                                 -- base_card_id of the leader (no FK — base_card_id is non-unique by design)
-    is_physical  BOOLEAN NOT NULL DEFAULT 0,  -- TRUE = sleeved, locks cards
-    notes        TEXT,
-    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-### `deck_cards` — cards in a deck (gameplay level)
-
-```sql
-CREATE TABLE deck_cards (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    deck_id      INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
-    base_card_id TEXT NOT NULL,   -- gameplay identity, not printing-specific
-    quantity     INTEGER NOT NULL DEFAULT 1 CHECK(quantity > 0),
-    UNIQUE(deck_id, base_card_id)
-);
-```
-
-### `app_settings` — key/value config store
-
-```sql
-CREATE TABLE app_settings (
-    key    TEXT PRIMARY KEY,
-    value  TEXT
-);
-```
+`placed` exceeding `loose` **warns, never blocks** — placement is gradual
+bookkeeping across thousands of cards and must never gate recording ownership
+(D-019).
 
 ---
 
-## 8. Sanitization Rules
+## 5. Sync pipeline
 
-Applied by the sync script to every raw API row before inserting into `cards`:
+```mermaid
+flowchart LR
+    A[/api/allSetCards/] --> D[merge + dedupe<br/>by card_image_id]
+    B[/api/allSTCards/] --> D
+    C[/api/promos/filtered/] --> D
+    D --> E[sanitize_row<br/>11 pure rules]
+    E -->|no card_image_id| F[(skipped_cards_log)]
+    E -->|unparsed sub_types| G[(unknown_type_log)]
+    E -->|ok| H[(cards<br/>INSERT OR REPLACE)]
+    E --> I[(card_types)]
+```
 
-1. **Null normalization.** Convert `"NULL"` (string), `"?"`, `""`, whitespace-only → actual SQL NULL.
-2. **Integer conversion.** `cost`, `power`, `counter` — safe string-to-int; null-likes → NULL.
-3. **Counter normalization.** For Leaders, Events, Stages: force `counter = NULL` regardless of API value. For Characters: preserve the integer (including `0` for no-counter Characters).
-4. **Color normalization.** Replace space separator with `/`. `"Blue Red"` → `"Blue/Red"`.
-5. **Attribute normalization.** Strip spaces around `/`. `"Slash / Special"` → `"Slash/Special"`.
-6. **Sub_types parsing.** Longest-match against `known_types`. Matches → rows in `card_types` (deduplicated by `base_card_id`). Failed parses → entry in `unknown_type_log`.
-7. **Printing variant extraction.** Parse from `card_image_id` suffix. `"OP05-097_p1"` → `printing_variant = "p1"`. `"OP05-097"` → NULL.
-8. **Keyword detection.** Scan `effect` for `[Trigger]`, `[Blocker]`, `[Rush]`, `[Double Attack]`, `[Banish]`. Set corresponding `has_*` boolean. Simple substring match — false positives on cards that reference a keyword without having it are accepted as a v1 limitation.
-9. **Image URL.** Store full URL exactly as returned by API.
-10. **Last synced.** Stamp every row with current timestamp on each sync.
-11. **Empty effect handling.** Vanilla cards are valid. API often returns `"NULL"` string — rule #1 converts to SQL NULL. Do NOT enforce NOT NULL on `effect`.
-12. **Skip cards with NULL `card_image_id`.** Log to `skipped_cards_log` with reason `"missing card_image_id"`. Do not insert.
-13. **DON cards excluded.** Do not call `/api/allDonCards/`. Excluded from v1.
-14. **Promo cards included.** Call `/api/allPromoCards/` in addition to main card endpoint.
+4,459 raw rows collapse to 4,338 unique printings — the same printing
+legitimately appears in more than one endpoint. Re-running must never duplicate.
 
 ---
 
-## 9. API Response Structure (OptcgAPI)
+## 6. Sanitization rules
 
-Three endpoints provide complete card data (no single `/api/allCards/` exists):
+Pure functions in `src/sanitize.py` — no DB access, no side effects, one per rule.
 
-| Endpoint | What it returns |
+| # | Function | Does |
+|---|---|---|
+| 1 | `normalize_null` | `"NULL"`, `"?"`, `""`, `"-"`, whitespace → `None` |
+| 2 | `to_int` | Safe string→int; null-likes → `None` |
+| 3 | `normalize_counter` | Int for Characters; forced `NULL` otherwise |
+| 4 | `normalize_colors` | `"Blue Red"` → `"Blue/Red"` |
+| 5 | `normalize_attributes` | `"Slash / Special"` → `"Slash/Special"` |
+| 6 | `parse_subtypes` | Longest-match against `known_types` → `(matched, leftover)` |
+| 7 | `extract_printing_variant` | `"OP05-097_p1"` → `"p1"`; base printing → `None` |
+| 8 | `detect_keywords` | Substring-matches the five bracketed keywords |
+| 9 | `repair_field_shift` | Fixes upstream rows with power/sub_types misaligned (D-013) |
+| 10 | `normalize_card_image_id` | Strips file extensions, folds `-variant` → `_variant` (D-014) |
+| 11 | `strip_printing_suffix` | `"P-029_r1"` → `"P-029"` — the gameplay identity (D-014) |
+
+**Sync-level behaviors** (in `sync.py`, not pure functions): rows with no
+`card_image_id` go to `skipped_cards_log`; sub-types that don't fully parse go to
+`unknown_type_log`; every row is stamped `last_synced`; `image_url` is stored
+exactly as returned; vanilla cards are valid so `effect` is never `NOT NULL`.
+
+**Sub-type parsing gotcha:** longest-match matters. `"Neo Navy"` must be matched
+before `"Navy"`, or you get a false `Navy` plus `"Neo"` as leftover.
+`parse_subtypes` sorts known types by length descending for exactly this reason.
+
+---
+
+## 7. OptcgAPI reference
+
+There is **no** `/api/allCards/` and **no** `/api/allPromoCards/` — both 404.
+
+| Endpoint | Returns |
 |---|---|
 | `/api/allSetCards/` | Booster set cards (bare JSON array) |
 | `/api/allSTCards/` | Starter deck cards (bare JSON array) |
-| `/api/promos/filtered/?rarity=PR` | Promo cards (`/api/allPromoCards/` is 404) |
-| `/api/sets/card/{card_id}/` | Single card lookup |
+| `/api/promos/filtered/?rarity=PR` | Promo cards |
+| `/api/sets/card/{card_id}/` | Single card, for debugging |
 
-Key fields returned per card:
+Field names differ from what you'd guess — `FIELD_ALIASES` in `sync.py` maps them:
 
-| API field | Maps to |
-|---|---|
-| `card_image_id` | `cards.card_image_id` (PRIMARY KEY) |
-| `card_set_id` | base of `base_card_id` |
-| `card_name` | `cards.name` |
-| `card_type` | `cards.category` |
-| `card_cost` | `cards.cost` |
-| `card_power` | `cards.power` |
-| `counter_amount` | `cards.counter` |
-| `card_color` | `cards.color` |
-| `sub_types` | parsed into `card_types` |
-| `card_text` | `cards.effect` |
-| `set_id` | `cards.set_code` |
-| `rarity` | `cards.rarity` |
-| `card_image` | `cards.image_url` |
+| API field | → | Column |
+|---|---|---|
+| `card_image_id` | → | `card_image_id` (PK) |
+| `card_set_id` | → | `base_card_id` (suffix-stripped) |
+| `card_name` | → | `name` |
+| `card_type` | → | `category` |
+| `card_cost` / `card_power` | → | `cost` / `power` |
+| `counter_amount` | → | `counter` |
+| `card_color` | → | `color` |
+| `sub_types` | → | parsed into `card_types` |
+| `card_text` | → | `effect` |
+| `set_id` | → | `set_code` |
+| `card_image` | → | `image_url` |
 
----
-
-## 10. Open Items
-
-- [x] ~~Confirm whether promo cards appear in main `/api/allCards/` or need a separate endpoint call.~~ Resolved: no `/api/allCards/` exists; use three endpoints (set, ST, promo). Promos need `/api/promos/filtered/?rarity=PR`.
-- [x] ~~Bootstrap initial `known_types` list.~~ Resolved: 243 seed types from live API data. 3 remaining unknowns are numeric data errors.
-- [ ] Decide React vs Svelte at Phase 3 start.
+**The API lags the real game** — currently ends at OP16 while the game is at
+OP17. Not a bug in this code.
 
 ---
 
-## 11. Deferred / Out of Scope (v1)
+## 8. Working principles
 
-- DON!! cards
-- Card condition / grading
-- Price tracking
-- Japanese cards
-- Promo printings with no API `card_image_id` (logged, revisit when API catches up)
-- Multi-user / cloud sync
+- **Schema first.** Get the schema right before writing application code.
+- **CLI before UI.** Validate logic in Python before building Tauri/React.
+- **Log don't crash.** Bad API rows go to log tables, never exceptions.
+- **Idempotent sync.** Running it twice must not duplicate data.
+- **Pure sanitization.** `sanitize.py` never touches the DB.
+- **No DON cards.**
 
 ---
 
-*End of design document.*
+## 9. Roadmap
+
+| Phase | Description | Status |
+|---|---|---|
+| 0 | Data foundation — schema + OptcgAPI sync | ✅ Complete |
+| 1 | Collection + decks (CLI) — import, storage locations | ✅ Complete |
+| 2 | Deck completion & insights (CLI) — owned vs missing | ← current |
+| 3 | Minimal UI (Tauri + React/Svelte) | |
+| 4 | Interactive deck builder | |
+| 5 | Images & polish — local cache, hover previews | |
+| 6+ | Future ideas (below) | |
+
+**Open:** React vs Svelte, decided at Phase 3 start.
+
+---
+
+## 10. Deferred / out of scope
+
+**Wanted eventually, no schema support yet:** cannibalization analysis
+(availability form 3), "decks I could build with N more cards", trade tracking,
+win/loss and last-played per deck, deck tags/archetypes, format flag,
+trigger-text parsing for filterable search, DON!! cards, JP-exclusive cards,
+price history, multiple physical owners.
+
+**Hook exists:** local image cache (Phase 5), auto-detection of new sub-types
+(currently a manual `unknown_type_log` review), foil-vs-non-foil usage
+(`foil_quantity` lands in Phase 1 but stays 0 — see §3 "Printing variants").
+
+**Never:** hosting, multi-user, auth, condition/grading, playtesting/simulation.

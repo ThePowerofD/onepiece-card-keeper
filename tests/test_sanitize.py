@@ -15,8 +15,11 @@ from src.sanitize import (
     normalize_attributes,
     normalize_colors,
     normalize_counter,
+    normalize_card_image_id,
     normalize_null,
     parse_subtypes,
+    repair_field_shift,
+    strip_printing_suffix,
     to_int,
 )
 
@@ -139,6 +142,109 @@ class ParseSubtypesTests(unittest.TestCase):
         matched, leftover = parse_subtypes("Marine, Supernovas", self.KNOWN)
         self.assertEqual(set(matched), {"Marine", "Supernovas"})
         self.assertEqual(leftover, "")
+
+
+class RepairFieldShiftTests(unittest.TestCase):
+    def test_healthy_row_untouched(self):
+        power, sub_types, repaired = repair_field_shift("5000", "Animal Straw Hat Crew")
+        self.assertEqual(power, "5000")
+        self.assertEqual(sub_types, "Animal Straw Hat Crew")
+        self.assertFalse(repaired)
+
+    def test_healthy_row_with_no_power(self):
+        power, sub_types, repaired = repair_field_shift(None, "Straw Hat Crew")
+        self.assertIsNone(power)
+        self.assertEqual(sub_types, "Straw Hat Crew")
+        self.assertFalse(repaired)
+
+    def test_swap_recovers_both_fields(self):
+        # EB03-050 Conis: power holds the type text, sub_types holds the power
+        power, sub_types, repaired = repair_field_shift("Sky Island", "1000")
+        self.assertEqual(power, 1000)
+        self.assertEqual(sub_types, "Sky Island")
+        self.assertTrue(repaired)
+
+    def test_swap_multiword_type(self):
+        # EB03-009 Makino
+        power, sub_types, repaired = repair_field_shift("Windmill Village", "2000")
+        self.assertEqual(power, 2000)
+        self.assertEqual(sub_types, "Windmill Village")
+        self.assertTrue(repaired)
+
+    def test_shift_recovers_power_and_drops_lost_subtypes(self):
+        # OP08-001 Chopper: sub_types are gone from this row entirely
+        power, sub_types, repaired = repair_field_shift("4", "5000")
+        self.assertEqual(power, 5000)
+        self.assertIsNone(sub_types)
+        self.assertTrue(repaired)
+
+    def test_numeric_sub_types_with_missing_power(self):
+        power, sub_types, repaired = repair_field_shift(None, "3000")
+        self.assertEqual(power, 3000)
+        self.assertIsNone(sub_types)
+        self.assertTrue(repaired)
+
+    def test_integer_sub_types_are_detected(self):
+        power, sub_types, repaired = repair_field_shift("Sky Island", 1000)
+        self.assertEqual(power, 1000)
+        self.assertEqual(sub_types, "Sky Island")
+        self.assertTrue(repaired)
+
+    def test_null_like_sub_types_untouched(self):
+        for value in [None, "NULL", "?", "", "-"]:
+            power, sub_types, repaired = repair_field_shift("5000", value)
+            self.assertEqual(power, "5000", msg=repr(value))
+            self.assertEqual(sub_types, value, msg=repr(value))
+            self.assertFalse(repaired, msg=repr(value))
+
+    def test_type_containing_a_number_is_not_treated_as_bare(self):
+        power, sub_types, repaired = repair_field_shift("5000", "Baroque Works 13")
+        self.assertEqual(power, "5000")
+        self.assertEqual(sub_types, "Baroque Works 13")
+        self.assertFalse(repaired)
+
+
+class NormalizeCardImageIdTests(unittest.TestCase):
+    def test_clean_ids_untouched(self):
+        for value in ["OP05-097", "OP05-097_p1", "EB03_OP05-006_p1", "P-029"]:
+            self.assertEqual(normalize_card_image_id(value), value, msg=repr(value))
+
+    def test_strips_file_extension(self):
+        self.assertEqual(normalize_card_image_id("EB02-052_p2.jpg"), "EB02-052_p2")
+
+    def test_folds_hyphen_variant_to_underscore(self):
+        self.assertEqual(normalize_card_image_id("OP09-078-r1"), "OP09-078_r1")
+        self.assertEqual(normalize_card_image_id("P-089-pr6"), "P-089_pr6")
+
+    def test_plain_card_number_is_not_a_variant(self):
+        # 'OP05-097' must not read '-097' as a variant (digits only, no letters)
+        self.assertEqual(normalize_card_image_id("OP05-097"), "OP05-097")
+        self.assertEqual(normalize_card_image_id("P-029"), "P-029")
+
+    def test_null_likes(self):
+        for value in [None, "NULL", "?", "", "  "]:
+            self.assertIsNone(normalize_card_image_id(value), msg=repr(value))
+
+
+class StripPrintingSuffixTests(unittest.TestCase):
+    def test_strips_underscore_variant(self):
+        self.assertEqual(strip_printing_suffix("P-029_r1"), "P-029")
+        self.assertEqual(strip_printing_suffix("OP05-097_p1"), "OP05-097")
+
+    def test_strips_hyphen_variant(self):
+        self.assertEqual(strip_printing_suffix("OP09-078-r1"), "OP09-078")
+
+    def test_leaves_base_ids_alone(self):
+        for value in ["OP05-097", "P-029", "EB03-050", "ST30-001"]:
+            self.assertEqual(strip_printing_suffix(value), value, msg=repr(value))
+
+    def test_null_likes(self):
+        for value in [None, "NULL", ""]:
+            self.assertIsNone(strip_printing_suffix(value), msg=repr(value))
+
+    def test_every_printing_of_a_card_collapses_to_one_identity(self):
+        printings = ["P-029", "P-029_p3", "P-029_p4", "P-029_pr1", "P-029_r1", "P-029_r2"]
+        self.assertEqual({strip_printing_suffix(p) for p in printings}, {"P-029"})
 
 
 class ExtractPrintingVariantTests(unittest.TestCase):

@@ -18,10 +18,13 @@ from src.db_setup import DB_PATH, connect
 from src.sanitize import (
     detect_keywords,
     extract_printing_variant,
+    normalize_card_image_id,
     normalize_colors,
     normalize_counter,
     normalize_null,
     parse_subtypes,
+    repair_field_shift,
+    strip_printing_suffix,
     to_int,
 )
 
@@ -56,15 +59,17 @@ def load_known_types(conn: sqlite3.Connection) -> list[str]:
 def sanitize_row(row: dict, known_types: list[str], now: str) -> dict | None:
     """Return sanitized column values, or None if the row should be skipped."""
     raw_image_id = pick(row, "card_image_id")
-    card_image_id = normalize_null(raw_image_id)
+    card_image_id = normalize_card_image_id(raw_image_id)
     if card_image_id is None:
         return None
 
-    base_card_id = normalize_null(pick(row, "card_id")) or card_image_id.split("_")[0]
+    base_card_id = strip_printing_suffix(pick(row, "card_id")) or strip_printing_suffix(card_image_id)
     category = normalize_null(pick(row, "category"))
 
     keywords = detect_keywords(pick(row, "card_text"))
-    raw_sub_types = pick(row, "sub_types")
+    raw_power, raw_sub_types, repaired = repair_field_shift(
+        pick(row, "power"), pick(row, "sub_types")
+    )
     matched_types, leftover = parse_subtypes(raw_sub_types, known_types)
 
     return {
@@ -74,7 +79,7 @@ def sanitize_row(row: dict, known_types: list[str], now: str) -> dict | None:
         "name": normalize_null(pick(row, "name")) or "",
         "category": category or "",
         "cost": to_int(pick(row, "cost")),
-        "power": to_int(pick(row, "power")),
+        "power": to_int(raw_power),
         "counter": normalize_counter(category, pick(row, "counter")),
         "color": normalize_colors(pick(row, "color")),
         "card_type": normalize_null(raw_sub_types),
@@ -91,6 +96,7 @@ def sanitize_row(row: dict, known_types: list[str], now: str) -> dict | None:
         "_matched_types": matched_types,
         "_leftover_types": leftover,
         "_raw_sub_types": raw_sub_types,
+        "_repaired": repaired,
     }
 
 
@@ -136,7 +142,13 @@ def sync(conn: sqlite3.Connection, use_cache: bool = False) -> dict[str, int]:
     print(f"  ->{len(promos)} rows")
 
     all_rows = set_cards + st_cards + promos
-    stats = {"total": len(all_rows), "inserted": 0, "skipped": 0, "unknown_types": 0}
+    stats = {
+        "total": len(all_rows),
+        "inserted": 0,
+        "skipped": 0,
+        "unknown_types": 0,
+        "repaired": 0,
+    }
 
     cur = conn.cursor()
     for row in all_rows:
@@ -148,6 +160,8 @@ def sync(conn: sqlite3.Connection, use_cache: bool = False) -> dict[str, int]:
 
         cur.execute(UPSERT_CARD_SQL, {k: v for k, v in sanitized.items() if not k.startswith("_")})
         stats["inserted"] += 1
+        if sanitized["_repaired"]:
+            stats["repaired"] += 1
 
         for type_name in sanitized["_matched_types"]:
             cur.execute(UPSERT_CARD_TYPE_SQL, (sanitized["base_card_id"], type_name))
@@ -178,6 +192,7 @@ def main() -> None:
         print(f"  Inserted/updated:   {stats['inserted']}")
         print(f"  Skipped (no id):    {stats['skipped']}")
         print(f"  Unknown sub_types:  {stats['unknown_types']}")
+        print(f"  Field-shift repairs:{stats['repaired']}")
         count = conn.execute("SELECT COUNT(*) FROM cards").fetchone()[0]
         print(f"  cards table count:  {count}")
     finally:

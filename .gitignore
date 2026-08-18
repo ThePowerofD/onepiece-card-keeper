@@ -31,3 +31,8 @@ data/cache/
 
 # OS
 Thumbs.db
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
