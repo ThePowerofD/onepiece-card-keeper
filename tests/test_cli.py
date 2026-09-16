@@ -162,7 +162,7 @@ class DeckCommandTests(CliTestCase):
         self.run_cli("deck", "import", str(self.decklist), "--name", "Red", "--physical")
         code, out, _ = self.run_cli("deck", "delete", "Red")
         self.assertEqual(code, 0)
-        self.assertIn("collection is unchanged", out)
+        self.assertIn("back to just-loose", out)
 
     def test_set_physical_warns(self):
         self.run_cli("deck", "import", str(self.decklist), "--name", "Wish", "--wishlist")
@@ -178,34 +178,56 @@ class DeckCommandTests(CliTestCase):
 
 
 class CollectionCommandTests(CliTestCase):
-    def test_add_set_remove(self):
+    def test_add_move_and_remove(self):
         code, out, _ = self.run_cli("collection", "add", "OP05-001", "3")
         self.assertEqual(code, 0)
-        self.assertIn("now 3", out)
+        self.assertIn("now 3 owned", out)
+        self.assertIn("just-loose", out)
 
-        _, out, _ = self.run_cli("collection", "set", "OP05-001", "5")
-        self.assertIn("now 5", out)
+        self.run_cli("location", "add", "Binder A", "--kind", "binder")
+        code, out, _ = self.run_cli("collection", "move", "OP05-001", "2", "--to", "Binder A")
+        self.assertEqual(code, 0)
+        self.assertIn("just-loose -> Binder A", out)
 
-        _, out, _ = self.run_cli("collection", "remove", "OP05-001", "2")
-        self.assertIn("now 3", out)
+        code, out, _ = self.run_cli("collection", "remove", "OP05-001", "1")
+        self.assertEqual(code, 0)
+        self.assertIn("now 2 owned", out)
 
-    def test_guard_is_reported_not_raised(self):
-        self.run_cli("deck", "import", str(self.decklist), "--name", "Red", "--physical")
+    def test_add_with_an_art(self):
+        code, out, _ = self.run_cli("collection", "add", "OP05-001", "2", "--art", "p1")
+        self.assertEqual(code, 0)
+        _, out, _ = self.run_cli("collection", "show", "OP05-001")
+        self.assertIn("OP05-001_p1", out)
+
+    def test_set_art_splits_the_pile(self):
+        self.run_cli("collection", "add", "OP05-001", "4")
+        code, out, _ = self.run_cli("collection", "set-art", "OP05-001", "1", "p1")
+        self.assertEqual(code, 0)
+        self.assertIn("3 still unsorted", out)
+
+    def test_taking_more_than_you_have_is_reported_not_raised(self):
+        self.run_cli("collection", "add", "OP05-001", "1")
         code, _, err = self.run_cli("collection", "remove", "OP05-001", "4")
         self.assertEqual(code, 1)
-        self.assertIn("physical decks", err)
+        self.assertIn("not 4", err)
 
-    def test_unknown_printing(self):
+    def test_unknown_card(self):
         code, _, err = self.run_cli("collection", "add", "ZZ99-999", "1")
         self.assertEqual(code, 1)
-        self.assertIn("unknown printing", err)
+        self.assertIn("unknown card", err)
+
+    def test_unknown_art_lists_the_real_ones(self):
+        code, _, err = self.run_cli("collection", "add", "OP05-001", "1", "--art", "zz9")
+        self.assertEqual(code, 1)
+        self.assertIn("known arts", err)
 
     def test_show(self):
         self.run_cli("collection", "add", "OP05-001", "3")
         code, out, _ = self.run_cli("collection", "show", "OP05-001")
         self.assertEqual(code, 0)
         self.assertIn("owned 3", out)
-        self.assertIn("unplaced", out)
+        self.assertIn("unsorted", out)
+        self.assertIn("where they are", out)
 
     def test_show_unknown_card(self):
         code, out, _ = self.run_cli("collection", "show", "ZZ99-999")
@@ -217,12 +239,17 @@ class CollectionCommandTests(CliTestCase):
         code, out, _ = self.run_cli("collection", "list", "--owned-only")
         self.assertEqual(code, 0)
         self.assertIn("OP05-001", out)
-        self.assertIn("1 card(s)", out)
+        self.assertIn("2 printing(s)", out)      # base and its parallel
 
     def test_list_by_category(self):
         code, out, _ = self.run_cli("collection", "list", "--category", "Leader")
         self.assertIn(LEADER, out)
-        self.assertIn("1 card(s)", out)
+        self.assertIn("1 printing(s)", out)
+
+    def test_list_by_name_search(self):
+        code, out, _ = self.run_cli("collection", "list", "--search", "Card 1 ")
+        self.assertEqual(code, 0)
+        self.assertIn("Card 1", out)
 
 
 class StorageCommandTests(CliTestCase):
@@ -238,11 +265,17 @@ class StorageCommandTests(CliTestCase):
         self.assertIn("renamed", out)
 
         _, out, _ = self.run_cli("location", "delete", "Binder One")
-        self.assertIn("still own the cards", out)
+        self.assertIn("back to just-loose", out)
 
-    def test_location_list_empty(self):
+    def test_location_list_always_has_just_loose(self):
         code, out, _ = self.run_cli("location", "list")
-        self.assertIn("no locations yet", out)
+        self.assertEqual(code, 0)
+        self.assertIn("just-loose", out)
+
+    def test_just_loose_is_protected(self):
+        code, _, err = self.run_cli("location", "delete", "just-loose")
+        self.assertEqual(code, 1)
+        self.assertIn("built in", err)
 
     def test_duplicate_location(self):
         self.run_cli("location", "add", "Binder A")
@@ -250,46 +283,55 @@ class StorageCommandTests(CliTestCase):
         self.assertEqual(code, 1)
         self.assertIn("already exists", err)
 
-    def test_place_and_unplace(self):
-        self.run_cli("collection", "add", "OP05-001", "4")
-        self.run_cli("location", "add", "Binder A")
-
-        code, out, _ = self.run_cli("place", "OP05-001", "Binder A", "2")
-        self.assertEqual(code, 0)
-        self.assertNotIn("warning", out)
-
-        code, out, _ = self.run_cli("unplace", "OP05-001", "Binder A", "1")
-        self.assertEqual(code, 0)
-        self.assertIn(": 1", out)
-
-    def test_place_more_than_owned_warns_but_succeeds(self):
-        self.run_cli("collection", "add", "OP05-001", "1")
-        self.run_cli("location", "add", "Binder A")
-        code, out, _ = self.run_cli("place", "OP05-001", "Binder A", "9")
-        self.assertEqual(code, 0)
-        self.assertIn("warning:", out)
-
-    def test_place_into_unknown_location(self):
-        code, _, err = self.run_cli("place", "OP05-001", "Nowhere", "1")
-        self.assertEqual(code, 1)
-        self.assertIn("no storage location", err)
-
-    def test_over_placement_shows_a_readable_summary(self):
-        """A negative 'unplaced' must not leak into the output."""
-        # 4 owned and all 4 sleeved, then 2 more bought -> only 2 are loose.
-        self.run_cli("deck", "import", str(self.decklist), "--name", "Red", "--physical")
+    def test_location_show(self):
         self.run_cli("collection", "add", "OP05-001", "2")
-        self.run_cli("location", "add", "Binder A")
-        self.run_cli("place", "OP05-001", "Binder A", "4")  # claims 4 loose, only 2 are
-
-        code, out, _ = self.run_cli("collection", "show", "OP05-001")
+        code, out, _ = self.run_cli("location", "show")
         self.assertEqual(code, 0)
-        self.assertNotIn("unplaced -", out)
-        self.assertIn("more copies placed in locations than are loose", out)
+        self.assertIn("OP05-001", out)
+        self.assertIn("(unsorted)", out)
 
+    def test_location_show_empty(self):
+        self.run_cli("location", "add", "Binder A")
+        code, out, _ = self.run_cli("location", "show", "Binder A")
+        self.assertEqual(code, 0)
+        self.assertIn("is empty", out)
 
-if __name__ == "__main__":
-    unittest.main()
+    def test_moving_into_an_unknown_container(self):
+        self.run_cli("collection", "add", "OP05-001", "1")
+        code, _, err = self.run_cli("collection", "move", "OP05-001", "1", "--to", "Nowhere")
+        self.assertEqual(code, 1)
+        self.assertIn("no location or deck named", err)
+
+    def test_ambiguous_container_asks_for_a_kind(self):
+        self.run_cli("location", "add", "Box 1", "--kind", "storage")
+        self.run_cli("location", "add", "Box 1", "--kind", "binder")
+        self.run_cli("collection", "add", "OP05-001", "1")
+        code, _, err = self.run_cli("collection", "move", "OP05-001", "1", "--to", "Box 1")
+        self.assertEqual(code, 1)
+        self.assertIn("--kind", err)
+
+        code, _, _ = self.run_cli("collection", "move", "OP05-001", "1",
+                                  "--to", "Box 1", "--to-kind", "binder")
+        self.assertEqual(code, 0)
+
+    def test_loan_keeps_ownership(self):
+        self.run_cli("collection", "add", "OP05-001", "2")
+        self.run_cli("location", "add", "Marco", "--kind", "loan")
+        code, out, _ = self.run_cli("loan", "OP05-001", "1", "Marco")
+        self.assertEqual(code, 0)
+        self.assertIn("still own them", out)
+
+        _, out, _ = self.run_cli("collection", "show", "OP05-001")
+        self.assertIn("owned 2", out)
+        self.assertIn("Marco", out)
+
+    def test_moving_copies_into_a_deck(self):
+        self.run_cli("deck", "import", str(self.decklist), "--name", "Red", "--wishlist")
+        self.run_cli("collection", "add", "OP05-001", "1")
+        code, out, _ = self.run_cli("collection", "move", "OP05-001", "1",
+                                    "--to", "Red", "--to-kind", "deck")
+        self.assertEqual(code, 0)
+        self.assertIn("-> Red", out)
 
 
 class CliEdgeTests(CliTestCase):
@@ -304,13 +346,17 @@ class CliEdgeTests(CliTestCase):
         self.assertEqual(code, 130)
         self.assertIn("cancelled", err)
 
-    def test_unplace_without_a_quantity_removes_all(self):
+    def test_moving_copies_back_out_of_a_container(self):
         self.run_cli("collection", "add", "OP05-001", "4")
         self.run_cli("location", "add", "Binder A")
-        self.run_cli("place", "OP05-001", "Binder A", "3")
-        code, out, _ = self.run_cli("unplace", "OP05-001", "Binder A")
+        self.run_cli("collection", "move", "OP05-001", "3", "--to", "Binder A")
+        code, out, _ = self.run_cli("collection", "move", "OP05-001", "3",
+                                    "--from", "Binder A", "--to", "just-loose")
         self.assertEqual(code, 0)
-        self.assertIn(": 0", out)
+        self.assertIn("Binder A -> just-loose", out)
+
+        _, out, _ = self.run_cli("location", "show", "Binder A")
+        self.assertIn("is empty", out)
 
     def test_deck_show_by_id(self):
         self.run_cli("deck", "import", str(self.decklist), "--name", "Red", "--physical")

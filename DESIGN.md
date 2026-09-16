@@ -80,17 +80,24 @@ Only 170 printings say "Foil" outright (Pirate Foil 80, Jolly Roger Foil 68,
 Textured Foil 22). Most premium treatments are foil without saying so — Alternate
 Art (476), Reprint (249), Parallel (180), SP (108), Full Art (72), Manga (40),
 SPR (26). Because these each get their own `card_image_id`, **the printing
-already encodes the foil**, which is why `foil_quantity` stays 0 (D-018).
+already encodes the foil**, which is why D-030 dropped `foil_quantity` rather
+than carrying it onto `copies` (superseding D-018).
 
-**Availability is computed, never stored:**
+**Ownership is the set of copies, and every copy is somewhere** (D-030). There
+is no stored total:
 
 ```
-available = collection.quantity − SUM(deck_cards.quantity WHERE decks.is_physical)
+owned     = SUM(copies.quantity)
+committed = SUM(copies.quantity) where the container is a physical deck
+loose     = owned - committed
 ```
 
-**Collection lifecycle:** when quantity hits zero, keep the row at 0. Never delete.
+**Copy lifecycle:** a row exists because copies exist. Taking the last one
+deletes the row; `quantity` is `CHECK > 0`.
 
-**Safety rule:** if a change would make available copies negative, warn and refuse.
+**Safety rule:** a move or removal that exceeds what the source container holds
+is an **error that writes nothing**. Every card is accounted for, so a negative
+pile is never the right answer.
 
 ### Availability has three forms
 
@@ -118,10 +125,10 @@ every built deck reports as incomplete.
 
 ```mermaid
 erDiagram
-    cards ||--o{ collection : "card_image_id"
+    cards ||--o{ copies : "card_image_id (art, nullable)"
     cards ||--o{ card_types : "base_card_id (no FK)"
-    cards ||--o{ collection_placements : "card_image_id"
-    storage_locations ||--o{ collection_placements : "location_id (cascade)"
+    storage_locations ||--o{ copies : "location_id (no cascade)"
+    decks ||--o{ copies : "deck_id (no cascade)"
     decks ||--o{ deck_cards : "deck_id (cascade)"
     deck_cards }o--|| cards : "base_card_id (no FK)"
 
@@ -146,23 +153,19 @@ erDiagram
         TEXT rarity
         TEXT image_url
     }
-    collection {
+    copies {
         INTEGER id PK
-        TEXT card_image_id FK
-        INTEGER quantity "CHECK >= 0"
-        INTEGER foil_quantity "reserved, 0 in v1"
+        TEXT base_card_id "the gameplay card you own"
+        TEXT card_image_id FK "the art - NULL = not sorted yet"
+        INTEGER location_id FK "exactly one of these"
+        INTEGER deck_id FK "two is set (CHECK)"
+        INTEGER quantity "CHECK > 0"
     }
     storage_locations {
         INTEGER id PK
         TEXT name "'OP13 Box' - UNIQUE per kind, not globally"
         TEXT kind "storage|binder|loose|loan (D-025)"
         TEXT notes
-    }
-    collection_placements {
-        INTEGER id PK
-        TEXT card_image_id FK
-        INTEGER location_id FK
-        INTEGER quantity "where the loose copies are"
     }
     decks {
         INTEGER id PK
@@ -191,55 +194,70 @@ Plus four standalone tables: `known_types` (the type vocabulary),
 `cards` also carries five `has_*` keyword booleans (`trigger`, `blocker`, `rush`,
 `double_attack`, `banish`) and a `last_synced` timestamp.
 
-**14 indexes:** `cards` on `base_card_id`, `category`, `color`, `set_code` and
-each keyword boolean; `card_types` on `base_card_id` and `type_name`;
-`collection_placements` on `card_image_id` and `location_id`;
-`storage_locations` on `kind`.
+**Indexes:** `cards` on `base_card_id`, `category`, `color`, `set_code` and each
+keyword boolean; `card_types` on `base_card_id` and `type_name`; `copies` on
+`base_card_id`, `location_id` and `deck_id`; `storage_locations` on `kind`.
+
+`copies` also carries a **unique** index over its card, art and container. The
+`COALESCE` in it is load-bearing: SQLite treats NULLs as distinct, so a plain
+UNIQUE would let two unsorted rows for the same card and container coexist.
+
+**Neither copy foreign key cascades, on purpose.** Deleting a binder or a deck
+must *move* its copies to `just-loose`, never destroy them, so the FK refuses
+until the caller has done that.
 
 ### Where a card lives: five categories, two tables
 
 ```
 Storage  ┐
-Binder   │  storage_locations.kind  →  collection_placements
-Loose    │
-Loan     ┘
-Decks    →  decks / deck_cards
+Binder   │  storage_locations.kind  ┐
+Loose    │                          ├→  copies.location_id  or  copies.deck_id
+Loan     ┘                          │
+Decks    →  decks (the recipe)  ────┘
 ```
 
-The owner thinks of all five as places a card can be (D-025). Four are storage
-kinds; **decks stay in `decks`** because a deck has a leader and a card list that
-no binder has. `collection.show()` returns both halves together, so a card lookup
-answers "which binder *and* which deck" in one call — the seam doesn't surface.
+The owner thinks of all five as places a card can be (D-025), and a copy row
+treats them identically. **Decks still live in `decks`** because a deck also has
+a leader and a recipe that no binder has — but as a *container* it is just
+another `copies` target, so `storage.resolve_container` returns either.
 
-Because names are unique only *within* a kind, a bare name can be ambiguous.
-Lookups refuse rather than guess, raising `AmbiguousLocation`; pass `kind` to
-resolve it.
+`just-loose` is a built-in `loose` location created with the schema: where copies
+land when no container is named, and where they come from when none is named. It
+can't be renamed or deleted. Other loose locations sit alongside it.
 
-**No views.** Availability is computed in Python (D-009) by
-`collection.show()` — `total_owned`, `committed`, `available` per *gameplay*
-card — and by `decks.show_deck()`, which additionally knows that a deck never
-competes with itself. The `available_cards` view was removed in D-026: at
-printing level it repeated one gameplay-level commitment on every printing row.
+Because names are unique only *within* a kind — and a deck may share a name with
+a location — a bare name can be ambiguous. Lookups refuse rather than guess,
+raising `AmbiguousLocation`; pass `kind` (including `deck`) to resolve it.
+
+**No views.** Availability is computed in Python (D-009) by `collection.show()`
+— `total_owned`, `committed`, `loose` per *gameplay* card — and by
+`decks.show_deck()`, which additionally knows that a deck never competes with
+itself. The `available_cards` view was removed in D-026: at printing level it
+repeated one gameplay-level commitment on every printing row. D-030 then removed
+the `collection` table too, so the total cannot disagree with the placements —
+it *is* their sum.
 
 **Two absent foreign keys are deliberate** — `base_card_id` is non-unique by
 design and SQLite requires a UNIQUE/PK target. See D-006.
 
-### How the placement numbers relate
+### How the copy numbers relate
 
-`collection.quantity` is the single source of truth for how many you own.
-Placements only say where the copies that aren't sleeved are sitting:
+Every number is a sum over `copies`, so nothing is stored twice and nothing can
+drift (D-030):
 
 ```
-owned    = collection.quantity
-in decks = Σ deck_cards.quantity for physical decks
-loose    = owned − in decks
-placed   = Σ collection_placements.quantity
-unplaced = loose − placed
+owned     = Σ copies.quantity                       for the base_card_id
+by art    = the same sum grouped by card_image_id   (NULL = not sorted yet)
+committed = Σ where the container is a physical deck
+loose     = owned − committed
+unsorted  = Σ where card_image_id IS NULL
+in a deck = Σ where deck_id = that deck
+unsleeved = recipe quantity − in that deck          per card
 ```
 
-`placed` exceeding `loose` **warns, never blocks** — placement is gradual
-bookkeeping across thousands of cards and must never gate recording ownership
-(D-019).
+There is no `unplaced`: a copy with no container can't exist, and one you haven't
+filed is in `just-loose`. A physical deck **can** be incomplete — that's the
+mechanism for stripping a deck to build another, not a defect.
 
 ---
 
@@ -270,7 +288,7 @@ Pure functions in `src/sanitize.py` — no DB access, no side effects, one per r
 |---|---|---|
 | 1 | `normalize_null` | `"NULL"`, `"?"`, `""`, `"-"`, whitespace → `None` |
 | 2 | `to_int` | Safe string→int; null-likes → `None` |
-| 3 | `normalize_counter` | Int for Characters; forced `NULL` otherwise |
+| 3 | `normalize_counter` | Int for Characters (0 = no counter); `NULL` otherwise |
 | 4 | `normalize_colors` | `"Blue Red"` → `"Blue/Red"` |
 | 5 | `normalize_attributes` | `"Slash Special"` / `"Slash / Special"` → `"Slash/Special"`; unknown tokens dropped |
 | 6 | `parse_subtypes` | Longest-match against `known_types` → `(matched, leftover)` |
@@ -282,6 +300,24 @@ Pure functions in `src/sanitize.py` — no DB access, no side effects, one per r
 | 12 | `normalize_life` | Int for Leaders; forced `NULL` otherwise |
 | 13 | `game_set_from_id` | `"OP05-006"` → `"OP05"` — the set, from `base_card_id` |
 | 14 | `printing_kind` | `"r1"` → `"reprint"`; `None` → `"base"` |
+
+**Every printing of a card agrees on its gameplay fields** (`inherit_from_base_printing`
+in `sync.py`, a post-pass, D-031). An alt art is the same card, so `category`,
+`cost`, `power`, `counter`, `color`, `card_type`, `attribute`, `life`, `effect`
+and the keyword booleans are reconciled across all printings of a
+`base_card_id`. **The base printing wins, unless it is empty** - then the first
+printing with a real value supplies it. `name`, `rarity`, `set_code` and
+`image_url` are genuinely per-printing and untouched. 852 fields across 455
+cards are rewritten on the current feed.
+
+A `counter` above 2000 is **reported, never rewritten**: every such value in the
+feed equals the card's power, so it is power leaking into the field. Real
+counters are 1000 or 2000.
+
+**`src/overrides.py`** is the hand-maintained `{base_card_id: {column: value}}`
+dict applied after inheritance, for cards where *every* printing is wrong and
+nothing can derive the fix. Same pattern as `SEED_TYPES` and `SET_BLOCKS`; it
+ships empty.
 
 **Id collisions are resolved before sanitizing** (`src/collisions.py`, pure,
 D-029). The API reuses `card_image_id` for physically different printings —
@@ -407,7 +443,8 @@ trigger-text parsing for filterable search, DON!! cards, JP-exclusive cards,
 price history, multiple physical owners.
 
 **Hook exists:** local image cache (Phase 5), auto-detection of new sub-types
-(currently a manual `unknown_type_log` review), foil-vs-non-foil usage
-(`foil_quantity` lands in Phase 1 but stays 0 — see §3 "Printing variants").
+(currently a manual `unknown_type_log` review), and foil-vs-non-foil for the
+*same* printing id (D-030 dropped `foil_quantity` with the `collection` table;
+most foils have their own printing id anyway — see §3 "Printing variants").
 
 **Never:** hosting, multi-user, auth, condition/grading, playtesting/simulation.

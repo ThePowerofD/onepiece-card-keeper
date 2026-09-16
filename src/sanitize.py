@@ -11,6 +11,17 @@ NULL_LIKES = {"NULL", "null", "?", "", "-", "--"}
 
 NO_COUNTER_CATEGORIES = {"Leader", "Event", "Stage"}
 
+# Categories where a counter is a real field, so "no counter" is 0 rather than
+# absent. The API spells it both ways - 995 Characters say 0 and 7 say nothing -
+# and NULL already means "this category can't have one" (D-008), so Characters
+# are normalised to an integer and NULL is kept for not-applicable (D-031).
+COUNTER_CATEGORIES = {"Character"}
+
+# Every counter above 2000 in the feed (5 of them) is exactly equal to the
+# card's power - the power leaked into the field. Real counters are 1000 or
+# 2000. Flagged by sync, never silently rewritten (D-031).
+MAX_PLAUSIBLE_COUNTER = 2000
+
 # Only Leaders have Life. Verified against all 4,459 API rows: 297/297 Leaders
 # carry one, and no Character, Event or Stage does.
 LIFE_CATEGORIES = {"Leader"}
@@ -73,11 +84,19 @@ def to_int(value):
 
 
 def normalize_counter(category, raw_value):
-    """Rule 3: int for Characters; NULL for everything else."""
+    """Rule 3: int for Characters; NULL for everything else.
+
+    A Character with no counter gets 0, not NULL: NULL is reserved for the
+    categories that can't have one at all (D-008), so keeping both spellings
+    would make "no counter" and "not applicable" indistinguishable (D-031).
+    """
     cat = normalize_null(category)
     if cat in NO_COUNTER_CATEGORIES:
         return None
-    return to_int(raw_value)
+    value = to_int(raw_value)
+    if value is None and cat in COUNTER_CATEGORIES:
+        return 0
+    return value
 
 
 def normalize_colors(value):

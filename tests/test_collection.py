@@ -1,4 +1,4 @@
-"""Unit tests for src/collection.py.
+"""Unit tests for src/collection.py — the copy model (D-030).
 
 Run:
     python -m pytest tests/test_collection.py -v
@@ -12,12 +12,19 @@ import unittest
 from src.collection import (
     CollectionError,
     add,
+    committed,
+    committed_elsewhere,
+    empty_container,
     list_cards,
+    move,
     remove,
-    set_quantity,
+    resolve_art,
+    set_art,
     show,
+    total_owned,
 )
 from src.db_setup import create_schema
+from src.storage import add_location, deck_container, loose_container, resolve_container
 
 
 def make_db() -> sqlite3.Connection:
@@ -28,248 +35,316 @@ def make_db() -> sqlite3.Connection:
 
 
 def add_card(conn, card_image_id, base_card_id, variant=None, name="Card",
-             category="Character", color="Red", set_code="OP-05"):
+             category="Character", color="Red", game_set="OP05"):
     conn.execute(
         "INSERT INTO cards (card_image_id, base_card_id, printing_variant, name, "
-        "category, color, set_code) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (card_image_id, base_card_id, variant, name, category, color, set_code),
+        "category, color, game_set) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (card_image_id, base_card_id, variant, name, category, color, game_set),
     )
-
-
-def add_deck(conn, name, is_physical, cards):
-    cur = conn.execute(
-        "INSERT INTO decks (name, is_physical) VALUES (?, ?)", (name, 1 if is_physical else 0)
-    )
-    for base_card_id, qty in cards:
-        conn.execute(
-            "INSERT INTO deck_cards (deck_id, base_card_id, quantity) VALUES (?, ?, ?)",
-            (cur.lastrowid, base_card_id, qty),
-        )
     conn.commit()
 
 
-def owned(conn, card_image_id):
-    row = conn.execute(
-        "SELECT quantity FROM collection WHERE card_image_id = ?", (card_image_id,)
-    ).fetchone()
-    return row[0] if row else None
+def add_deck(conn, name, is_physical=True):
+    cur = conn.execute(
+        "INSERT INTO decks (name, is_physical) VALUES (?, ?)", (name, 1 if is_physical else 0)
+    )
+    conn.commit()
+    return cur.lastrowid
 
 
-class QuantityTests(unittest.TestCase):
+def slots(conn, base_card_id):
+    """Every copy row for a card as (art, container_kind, quantity)."""
+    return conn.execute(
+        "SELECT card_image_id, location_id, deck_id, quantity FROM copies "
+        "WHERE base_card_id = ? ORDER BY (card_image_id IS NOT NULL), card_image_id",
+        (base_card_id,),
+    ).fetchall()
+
+
+class Base(unittest.TestCase):
     def setUp(self):
         self.conn = make_db()
-        add_card(self.conn, "OP05-097", "OP05-097", None, "Luffy")
-        self.conn.commit()
+        add_card(self.conn, "OP05-097", "OP05-097", name="Luffy")
+        add_card(self.conn, "OP05-097_p1", "OP05-097", "p1", name="Luffy (Parallel)")
+        add_card(self.conn, "OP05-002", "OP05-002", name="Zoro")
+        self.loose = loose_container(self.conn)
 
     def tearDown(self):
         self.conn.close()
 
-    def test_add_creates_the_row(self):
-        self.assertEqual(add(self.conn, "OP05-097", 3), 3)
-        self.assertEqual(owned(self.conn, "OP05-097"), 3)
 
-    def test_add_accumulates(self):
-        add(self.conn, "OP05-097", 2)
-        self.assertEqual(add(self.conn, "OP05-097", 3), 5)
+class AddTests(Base):
+    def test_lands_unsorted_in_just_loose(self):
+        self.assertEqual(add(self.conn, "OP05-097", 4), 4)
+        self.assertEqual(slots(self.conn, "OP05-097"),
+                         [(None, self.loose.location_id, None, 4)])
 
-    def test_set_is_absolute(self):
-        add(self.conn, "OP05-097", 9)
-        self.assertEqual(set_quantity(self.conn, "OP05-097", 2), 2)
-
-    def test_remove_subtracts(self):
-        add(self.conn, "OP05-097", 5)
-        self.assertEqual(remove(self.conn, "OP05-097", 2), 3)
-
-    def test_remove_floors_at_zero_and_keeps_the_row(self):
-        add(self.conn, "OP05-097", 2)
-        self.assertEqual(remove(self.conn, "OP05-097", 10), 0)
-        self.assertEqual(owned(self.conn, "OP05-097"), 0)  # row kept, not deleted (D-005)
-
-    def test_set_to_zero_keeps_the_row(self):
+    def test_repeated_adds_accumulate_in_one_row(self):
         add(self.conn, "OP05-097", 4)
-        set_quantity(self.conn, "OP05-097", 0)
-        self.assertEqual(owned(self.conn, "OP05-097"), 0)
-
-    def test_remove_from_absent_card_is_zero_not_an_error(self):
-        self.assertEqual(remove(self.conn, "OP05-097", 3), 0)
-
-    def test_unknown_printing_rejected(self):
-        with self.assertRaises(CollectionError) as ctx:
-            add(self.conn, "ZZ99-999", 1)
-        self.assertIn("unknown printing", str(ctx.exception))
-
-    def test_negative_quantities_rejected(self):
-        with self.assertRaises(CollectionError):
-            add(self.conn, "OP05-097", -1)
-        with self.assertRaises(CollectionError):
-            remove(self.conn, "OP05-097", -1)
-        with self.assertRaises(CollectionError):
-            set_quantity(self.conn, "OP05-097", -1)
-
-
-class GuardTests(unittest.TestCase):
-    """The guard works at gameplay level, not printing level (D-003)."""
-
-    def setUp(self):
-        self.conn = make_db()
-        add_card(self.conn, "OP05-097", "OP05-097", None, "Luffy")
-        add_card(self.conn, "OP05-097_p1", "OP05-097", "p1", "Luffy (Parallel)")
-        self.conn.commit()
-        add(self.conn, "OP05-097", 4)
-
-    def tearDown(self):
-        self.conn.close()
-
-    def test_refuses_dropping_below_what_physical_decks_use(self):
-        add_deck(self.conn, "Red Luffy", True, [("OP05-097", 4)])
-        with self.assertRaises(CollectionError) as ctx:
-            set_quantity(self.conn, "OP05-097", 2)
-        self.assertIn("physical decks", str(ctx.exception))
-        self.assertEqual(owned(self.conn, "OP05-097"), 4)  # unchanged
-
-    def test_allows_dropping_to_exactly_what_is_committed(self):
-        add_deck(self.conn, "Red Luffy", True, [("OP05-097", 4)])
-        self.assertEqual(set_quantity(self.conn, "OP05-097", 4), 4)
-
-    def test_wishlist_decks_do_not_lock_anything(self):
-        add_deck(self.conn, "Someday", False, [("OP05-097", 4)])
-        self.assertEqual(set_quantity(self.conn, "OP05-097", 0), 0)
-
-    def test_another_printing_can_satisfy_the_commitment(self):
-        """Owning the alt art means the base printing can go to zero."""
-        add_deck(self.conn, "Red Luffy", True, [("OP05-097", 4)])
-        add(self.conn, "OP05-097_p1", 4)
-        self.assertEqual(set_quantity(self.conn, "OP05-097", 0), 0)
-
-    def test_refuses_when_printings_together_cannot_cover_it(self):
-        add_deck(self.conn, "Red Luffy", True, [("OP05-097", 5)])
-        add(self.conn, "OP05-097_p1", 1)  # 4 + 1 = 5, exactly covered
-        with self.assertRaises(CollectionError):
-            set_quantity(self.conn, "OP05-097", 3)  # would leave 4 < 5
-
-    def test_adding_is_allowed_even_when_already_over_committed(self):
-        """Reachable by flipping a wishlist deck to physical.
-
-        In that state the collection is short, and adding copies is the fix —
-        so the guard must not block it.
-        """
-        add_deck(self.conn, "Greedy", True, [("OP05-097", 10)])
         self.assertEqual(add(self.conn, "OP05-097", 2), 6)
-        self.assertEqual(add(self.conn, "OP05-097_p1", 1), 1)
+        self.assertEqual(len(slots(self.conn, "OP05-097")), 1)
 
-    def test_still_refuses_reductions_while_over_committed(self):
-        add_deck(self.conn, "Greedy", True, [("OP05-097", 10)])
+    def test_art_can_be_given_up_front(self):
+        add(self.conn, "OP05-097", 2, art="p1")
+        self.assertEqual(slots(self.conn, "OP05-097"),
+                         [("OP05-097_p1", self.loose.location_id, None, 2)])
+
+    def test_sorted_and_unsorted_are_separate_rows(self):
+        add(self.conn, "OP05-097", 3)
+        add(self.conn, "OP05-097", 1, art="p1")
+        self.assertEqual(total_owned(self.conn, "OP05-097"), 4)
+        self.assertEqual(len(slots(self.conn, "OP05-097")), 2)
+
+    def test_into_a_named_container(self):
+        add_location(self.conn, "Binder A", "binder")
+        binder = resolve_container(self.conn, "Binder A")
+        add(self.conn, "OP05-097", 2, to=binder)
+        self.assertEqual(total_owned(self.conn, "OP05-097"), 2)
+        self.assertEqual(slots(self.conn, "OP05-097"), [(None, binder.location_id, None, 2)])
+
+    def test_unknown_card_is_refused(self):
         with self.assertRaises(CollectionError):
-            remove(self.conn, "OP05-097", 1)
+            add(self.conn, "XX99-999", 1)
 
-    def test_no_op_set_is_allowed_while_over_committed(self):
-        add_deck(self.conn, "Greedy", True, [("OP05-097", 10)])
-        self.assertEqual(set_quantity(self.conn, "OP05-097", 4), 4)
-
-    def test_remove_is_guarded_too(self):
-        add_deck(self.conn, "Red Luffy", True, [("OP05-097", 3)])
-        with self.assertRaises(CollectionError):
-            remove(self.conn, "OP05-097", 2)
+    def test_quantity_must_be_positive(self):
+        for bad in (0, -1):
+            with self.assertRaises(CollectionError):
+                add(self.conn, "OP05-097", bad)
 
 
-class ShowTests(unittest.TestCase):
-    def setUp(self):
-        self.conn = make_db()
-        add_card(self.conn, "OP05-097", "OP05-097", None, "Luffy")
-        add_card(self.conn, "OP05-097_p1", "OP05-097", "p1", "Luffy (Parallel)")
-        self.conn.commit()
+class ResolveArtTests(Base):
+    def test_none_means_unsorted(self):
+        self.assertIsNone(resolve_art(self.conn, "OP05-097", None))
+        self.assertIsNone(resolve_art(self.conn, "OP05-097", "unsorted"))
+
+    def test_bare_variant_full_id_and_base(self):
+        self.assertEqual(resolve_art(self.conn, "OP05-097", "p1"), "OP05-097_p1")
+        self.assertEqual(resolve_art(self.conn, "OP05-097", "OP05-097_p1"), "OP05-097_p1")
+        self.assertEqual(resolve_art(self.conn, "OP05-097", "base"), "OP05-097")
+
+    def test_art_of_a_different_card_is_refused(self):
+        add_card(self.conn, "OP05-002_p1", "OP05-002", "p1")
+        with self.assertRaises(CollectionError) as ctx:
+            resolve_art(self.conn, "OP05-097", "OP05-002_p1")
+        self.assertIn("printing of OP05-002", str(ctx.exception))
+
+    def test_unknown_art_lists_what_exists(self):
+        with self.assertRaises(CollectionError) as ctx:
+            resolve_art(self.conn, "OP05-097", "zz9")
+        self.assertIn("base", str(ctx.exception))
+        self.assertIn("p1", str(ctx.exception))
+
+
+class RemoveTests(Base):
+    def test_takes_from_just_loose_by_default(self):
         add(self.conn, "OP05-097", 4)
-        add(self.conn, "OP05-097_p1", 3)
+        self.assertEqual(remove(self.conn, "OP05-097", 1), 3)
 
-    def tearDown(self):
-        self.conn.close()
+    def test_empties_the_row_completely(self):
+        add(self.conn, "OP05-097", 2)
+        self.assertEqual(remove(self.conn, "OP05-097", 2), 0)
+        self.assertEqual(slots(self.conn, "OP05-097"), [])
 
-    def test_unknown_card_returns_none(self):
-        self.assertIsNone(show(self.conn, "ZZ99-999"))
+    def test_refuses_more_than_the_source_holds_and_writes_nothing(self):
+        add(self.conn, "OP05-097", 2)
+        with self.assertRaises(CollectionError) as ctx:
+            remove(self.conn, "OP05-097", 3)
+        self.assertIn("has 2", str(ctx.exception))
+        self.assertEqual(total_owned(self.conn, "OP05-097"), 2)
 
-    def test_totals_across_printings(self):
+    def test_unsorted_and_sorted_copies_are_taken_separately(self):
+        add(self.conn, "OP05-097", 2)
+        add(self.conn, "OP05-097", 2, art="p1")
+        remove(self.conn, "OP05-097", 2, art="p1")
+        self.assertEqual(total_owned(self.conn, "OP05-097"), 2)
+        self.assertEqual(slots(self.conn, "OP05-097"),
+                         [(None, self.loose.location_id, None, 2)])
+
+    def test_removing_a_sorted_art_you_have_none_of_is_refused(self):
+        add(self.conn, "OP05-097", 4)          # all unsorted
+        with self.assertRaises(CollectionError):
+            remove(self.conn, "OP05-097", 1, art="p1")
+
+
+class MoveTests(Base):
+    def setUp(self):
+        super().setUp()
+        add_location(self.conn, "Binder A", "binder")
+        self.binder = resolve_container(self.conn, "Binder A")
+
+    def test_moves_between_containers(self):
+        add(self.conn, "OP05-097", 4)
+        self.assertEqual(move(self.conn, "OP05-097", 2, self.loose, self.binder), 2)
+        self.assertEqual(total_owned(self.conn, "OP05-097"), 4)  # a move is not a loss
+
+    def test_merges_into_an_existing_row_at_the_destination(self):
+        add(self.conn, "OP05-097", 2, to=self.binder)
+        add(self.conn, "OP05-097", 3)
+        self.assertEqual(move(self.conn, "OP05-097", 3, self.loose, self.binder), 5)
+        self.assertEqual(len(slots(self.conn, "OP05-097")), 1)
+
+    def test_overflow_is_an_error_that_writes_nothing(self):
+        add(self.conn, "OP05-097", 2)
+        with self.assertRaises(CollectionError):
+            move(self.conn, "OP05-097", 3, self.loose, self.binder)
+        self.assertEqual(slots(self.conn, "OP05-097"),
+                         [(None, self.loose.location_id, None, 2)])
+
+    def test_same_container_is_refused(self):
+        add(self.conn, "OP05-097", 2)
+        with self.assertRaises(CollectionError):
+            move(self.conn, "OP05-097", 1, self.loose, self.loose)
+
+    def test_into_and_out_of_a_deck(self):
+        deck_id = add_deck(self.conn, "Law")
+        deck = deck_container(self.conn, deck_id)
+        add(self.conn, "OP05-097", 4)
+        move(self.conn, "OP05-097", 3, self.loose, deck)
+        self.assertEqual(committed(self.conn, "OP05-097"), 3)
+        move(self.conn, "OP05-097", 3, deck, self.loose)
+        self.assertEqual(committed(self.conn, "OP05-097"), 0)
+        self.assertEqual(total_owned(self.conn, "OP05-097"), 4)
+
+    def test_a_loan_is_a_move_and_keeps_ownership(self):
+        add_location(self.conn, "Marco", "loan")
+        marco = resolve_container(self.conn, "Marco")
+        add(self.conn, "OP05-097", 2)
+        move(self.conn, "OP05-097", 1, self.loose, marco)
+        self.assertEqual(total_owned(self.conn, "OP05-097"), 2)
         status = show(self.conn, "OP05-097")
-        self.assertEqual(status.total_owned, 7)
-        self.assertEqual(status.committed, 0)
-        self.assertEqual(status.available, 7)
+        self.assertIn(("Marco", "loan"), [(h.container, h.kind) for h in status.holdings])
+
+
+class SetArtTests(Base):
+    def test_splits_the_row_without_changing_the_total(self):
+        add(self.conn, "OP05-097", 4)
+        self.assertEqual(set_art(self.conn, "OP05-097", 1, "p1"), 3)
+        self.assertEqual(total_owned(self.conn, "OP05-097"), 4)
+        self.assertEqual(
+            slots(self.conn, "OP05-097"),
+            [(None, self.loose.location_id, None, 3),
+             ("OP05-097_p1", self.loose.location_id, None, 1)],
+        )
+
+    def test_sorting_the_last_copy_removes_the_unsorted_row(self):
+        add(self.conn, "OP05-097", 2)
+        self.assertEqual(set_art(self.conn, "OP05-097", 2, "p1"), 0)
+        self.assertEqual(slots(self.conn, "OP05-097"),
+                         [("OP05-097_p1", self.loose.location_id, None, 2)])
+
+    def test_applies_where_the_copies_actually_are(self):
+        add_location(self.conn, "Binder A", "binder")
+        binder = resolve_container(self.conn, "Binder A")
+        add(self.conn, "OP05-097", 2, to=binder)
+        add(self.conn, "OP05-097", 2)
+        set_art(self.conn, "OP05-097", 1, "p1", container=binder)
+        in_binder = {r[0]: r[3] for r in slots(self.conn, "OP05-097")
+                     if r[1] == binder.location_id}
+        self.assertEqual(in_binder, {None: 1, "OP05-097_p1": 1})
+
+    def test_re_sorting_from_one_art_to_another(self):
+        add(self.conn, "OP05-097", 2, art="p1")
+        set_art(self.conn, "OP05-097", 1, "base", frm_art="p1")
+        self.assertEqual({r[0]: r[3] for r in slots(self.conn, "OP05-097")},
+                         {"OP05-097_p1": 1, "OP05-097": 1})
+
+    def test_refuses_more_than_the_container_holds(self):
+        add(self.conn, "OP05-097", 1)
+        with self.assertRaises(CollectionError):
+            set_art(self.conn, "OP05-097", 2, "p1")
+        self.assertEqual(total_owned(self.conn, "OP05-097"), 1)
+
+    def test_needs_a_real_printing(self):
+        add(self.conn, "OP05-097", 1)
+        with self.assertRaises(CollectionError):
+            set_art(self.conn, "OP05-097", 1, "unsorted")
+
+
+class CommittedTests(Base):
+    def test_only_physical_decks_commit(self):
+        physical = deck_container(self.conn, add_deck(self.conn, "Real", True))
+        wishlist = deck_container(self.conn, add_deck(self.conn, "Someday", False))
+        add(self.conn, "OP05-097", 4)
+        move(self.conn, "OP05-097", 2, self.loose, physical)
+        move(self.conn, "OP05-097", 1, self.loose, wishlist)
+        self.assertEqual(committed(self.conn, "OP05-097"), 2)
+
+    def test_a_deck_never_competes_with_itself(self):
+        a = add_deck(self.conn, "A", True)
+        b = add_deck(self.conn, "B", True)
+        add(self.conn, "OP05-097", 4)
+        move(self.conn, "OP05-097", 2, self.loose, deck_container(self.conn, a))
+        move(self.conn, "OP05-097", 1, self.loose, deck_container(self.conn, b))
+        self.assertEqual(committed_elsewhere(self.conn, "OP05-097", a), 1)
+        self.assertEqual(committed_elsewhere(self.conn, "OP05-097", b), 2)
+
+
+class ShowTests(Base):
+    def test_unknown_card_is_none(self):
+        self.assertIsNone(show(self.conn, "XX99-999"))
+
+    def test_card_you_own_none_of_reports_zero(self):
+        status = show(self.conn, "OP05-097")
+        self.assertEqual(status.total_owned, 0)
+        self.assertEqual(status.arts, [])
         self.assertEqual(len(status.printings), 2)
 
-    def test_base_printing_listed_first(self):
-        status = show(self.conn, "OP05-097")
-        self.assertEqual(status.printings[0].card_image_id, "OP05-097")
+    def test_arts_holdings_and_derived_totals(self):
+        add_location(self.conn, "Binder A", "binder")
+        binder = resolve_container(self.conn, "Binder A")
+        deck = deck_container(self.conn, add_deck(self.conn, "Law", True))
+        add(self.conn, "OP05-097", 4)
+        move(self.conn, "OP05-097", 2, self.loose, binder)
+        move(self.conn, "OP05-097", 1, self.loose, deck)
+        set_art(self.conn, "OP05-097", 1, "p1", container=binder)
 
-    def test_committed_and_loose(self):
-        add_deck(self.conn, "Red Luffy", True, [("OP05-097", 4)])
         status = show(self.conn, "OP05-097")
-        self.assertEqual(status.committed, 4)
-        self.assertEqual(status.available, 3)
+        self.assertEqual(status.total_owned, 4)
+        self.assertEqual(status.committed, 1)
         self.assertEqual(status.loose, 3)
+        self.assertEqual(status.unsorted, 3)
+        self.assertEqual({(a.card_image_id, a.quantity) for a in status.arts},
+                         {(None, 3), ("OP05-097_p1", 1)})
+        self.assertEqual({(h.container, h.kind, h.quantity) for h in status.holdings},
+                         {("Binder A", "binder", 1), ("Binder A", "binder", 1),
+                          ("Law", "deck", 1), ("just-loose", "loose", 1)})
 
-    def test_wishlist_deck_shown_but_not_committed(self):
-        add_deck(self.conn, "Someday", False, [("OP05-097", 4)])
-        status = show(self.conn, "OP05-097")
-        self.assertEqual(status.committed, 0)
-        self.assertEqual([d.deck_name for d in status.decks], ["Someday"])
-        self.assertFalse(status.decks[0].is_physical)
 
-    def test_unplaced_counts_loose_copies_with_no_location(self):
-        status = show(self.conn, "OP05-097")
-        self.assertEqual(status.placed, 0)
-        self.assertEqual(status.unplaced, 7)
+class EmptyContainerTests(Base):
+    def test_moves_everything_to_just_loose_and_merges(self):
+        add_location(self.conn, "Binder A", "binder")
+        binder = resolve_container(self.conn, "Binder A")
+        add(self.conn, "OP05-097", 2, to=binder)
+        add(self.conn, "OP05-097", 1)
+        add(self.conn, "OP05-002", 3, to=binder)
 
-    def test_placements_reduce_unplaced(self):
-        self.conn.execute("INSERT INTO storage_locations (name) VALUES ('Binder A')")
-        loc = self.conn.execute("SELECT id FROM storage_locations").fetchone()[0]
-        self.conn.execute(
-            "INSERT INTO collection_placements (card_image_id, location_id, quantity) "
-            "VALUES ('OP05-097', ?, 2)",
-            (loc,),
-        )
+        self.assertEqual(empty_container(self.conn, binder), 5)
         self.conn.commit()
-
-        status = show(self.conn, "OP05-097")
-        self.assertEqual(status.placed, 2)
-        self.assertEqual(status.unplaced, 5)
-        self.assertEqual(status.printings[0].placements[0].location, "Binder A")
-
-    def test_card_with_no_collection_rows_shows_zeroes(self):
-        add_card(self.conn, "OP05-020", "OP05-020", None, "Zoro")
-        self.conn.commit()
-        status = show(self.conn, "OP05-020")
-        self.assertEqual(status.total_owned, 0)
-        self.assertEqual(status.printings[0].owned, 0)
+        self.assertEqual(slots(self.conn, "OP05-097"),
+                         [(None, self.loose.location_id, None, 3)])
+        self.assertEqual(total_owned(self.conn, "OP05-002"), 3)
 
 
-class ListTests(unittest.TestCase):
-    def setUp(self):
-        self.conn = make_db()
-        add_card(self.conn, "OP05-097", "OP05-097", None, "Luffy", "Character", "Red", "OP-05")
-        add_card(self.conn, "OP05-001", "OP05-001", None, "Leader", "Leader", "Blue/Red", "OP-05")
-        add_card(self.conn, "OP06-010", "OP06-010", None, "Other", "Character", "Green", "OP-06")
-        self.conn.commit()
+class ListCardsTests(Base):
+    def test_owned_counts_the_art_and_card_owned_counts_the_card(self):
+        add(self.conn, "OP05-097", 3)             # unsorted
+        add(self.conn, "OP05-097", 1, art="p1")
+        rows = {r[0]: (r[4], r[5]) for r in list_cards(self.conn)}
+        self.assertEqual(rows["OP05-097"], (0, 4))       # no copies recorded as base art
+        self.assertEqual(rows["OP05-097_p1"], (1, 4))
+
+    def test_owned_only_keeps_cards_whose_art_is_unrecorded(self):
         add(self.conn, "OP05-097", 2)
+        ids = {r[0] for r in list_cards(self.conn, owned_only=True)}
+        self.assertEqual(ids, {"OP05-097", "OP05-097_p1"})
 
-    def tearDown(self):
-        self.conn.close()
-
-    def test_lists_everything_by_default(self):
-        self.assertEqual(len(list_cards(self.conn)), 3)
-
-    def test_owned_only(self):
-        rows = list_cards(self.conn, owned_only=True)
-        self.assertEqual([r[0] for r in rows], ["OP05-097"])
-
-    def test_filter_by_set(self):
-        rows = list_cards(self.conn, set_code="OP-05")
-        self.assertEqual(len(rows), 2)
-
-    def test_filter_by_category(self):
-        rows = list_cards(self.conn, category="Leader")
-        self.assertEqual([r[0] for r in rows], ["OP05-001"])
-
-    def test_filter_by_color_matches_multicolour(self):
-        rows = list_cards(self.conn, color="Blue")
-        self.assertEqual([r[0] for r in rows], ["OP05-001"])
+    def test_filters(self):
+        add_card(self.conn, "OP06-001", "OP06-001", name="Nami",
+                 category="Leader", color="Blue", game_set="OP06")
+        self.assertEqual({r[0] for r in list_cards(self.conn, set_code="OP06")}, {"OP06-001"})
+        self.assertEqual({r[0] for r in list_cards(self.conn, color="Blue")}, {"OP06-001"})
+        self.assertEqual({r[0] for r in list_cards(self.conn, category="Leader")}, {"OP06-001"})
+        self.assertEqual({r[0] for r in list_cards(self.conn, q="Nam")}, {"OP06-001"})
 
     def test_limit(self):
         self.assertEqual(len(list_cards(self.conn, limit=2)), 2)

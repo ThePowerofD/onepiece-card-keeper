@@ -1,10 +1,13 @@
-"""Storage locations — where the loose cards physically are (D-019).
+"""Containers — the places copies live (D-025, D-030).
 
-`collection.quantity` stays the single source of truth for how many you own.
-Placements only describe where the copies that aren't sleeved into a deck are
-sitting. Placement is gradual bookkeeping across thousands of cards, so it must
-never be a precondition for recording ownership: over-placement **warns**, it
-does not block.
+A copy is in exactly one container: a storage location (storage / binder /
+loose / loan) or a physical deck. Decks keep their own table because a deck has
+a leader and a recipe that no binder has, but as a *container* they behave
+identically, so `resolve_container` returns either.
+
+`just-loose` is the built-in loose pile: where copies go when no container is
+named, and where they come from when none is named. It can't be renamed or
+deleted, because every operation with no container falls back to it.
 """
 
 from __future__ import annotations
@@ -12,13 +15,15 @@ from __future__ import annotations
 import sqlite3
 from typing import NamedTuple
 
+from src.db_setup import DEFAULT_LOOSE_LOCATION
+
 
 class StorageError(Exception):
     """A requested change was refused. Carries a message fit to print."""
 
 
 class AmbiguousLocation(StorageError):
-    """A bare name matched locations of several kinds; the caller must choose."""
+    """A bare name matched several containers; the caller must choose."""
 
     def __init__(self, name: str, kinds: list[str]):
         super().__init__(
@@ -28,9 +33,23 @@ class AmbiguousLocation(StorageError):
         self.kinds = kinds
 
 
-#: The four storage classes. Decks are the fifth category the UI shows, but they
-#: live in `decks` — they have a leader and a card list, which no binder has.
+#: The four storage classes. Decks are the fifth category (D-025) and live in
+#: `decks`, but `--kind deck` resolves one as a container.
 LOCATION_KINDS = ("storage", "binder", "loose", "loan")
+DECK_KIND = "deck"
+CONTAINER_KINDS = LOCATION_KINDS + (DECK_KIND,)
+
+
+class Container(NamedTuple):
+    """Somewhere copies can sit. Exactly one of the two ids is set."""
+    location_id: int | None
+    deck_id: int | None
+    kind: str
+    name: str
+
+    @property
+    def is_deck(self) -> bool:
+        return self.deck_id is not None
 
 
 class LocationSummary(NamedTuple):
@@ -42,104 +61,114 @@ class LocationSummary(NamedTuple):
     total_cards: int
 
 
-class PlaceResult(NamedTuple):
-    quantity: int
-    warning: str | None
-
-
 # --------------------------------------------------------------------------
-# internals
+# resolution
 # --------------------------------------------------------------------------
+
+def _require_kind(kind: str, allow_deck: bool = False) -> str:
+    allowed = CONTAINER_KINDS if allow_deck else LOCATION_KINDS
+    if kind not in allowed:
+        raise StorageError(f"unknown kind {kind!r} - one of {', '.join(allowed)}")
+    return kind
+
 
 def _location_id(conn: sqlite3.Connection, name: str, kind: str | None = None) -> int:
-    """Resolve a location by name, optionally narrowed to one kind.
+    container = resolve_container(conn, name, kind, allow_deck=False)
+    return container.location_id
 
-    Names are only unique per kind, so a bare name can match more than one
-    location. Rather than guess, that raises — same principle as D-017.
+
+def loose_container(conn: sqlite3.Connection) -> Container:
+    """The built-in loose pile, created with the schema."""
+    row = conn.execute(
+        "SELECT id FROM storage_locations WHERE name = ? AND kind = 'loose'",
+        (DEFAULT_LOOSE_LOCATION,),
+    ).fetchone()
+    if row is None:
+        raise StorageError(
+            f"the built-in {DEFAULT_LOOSE_LOCATION!r} location is missing - "
+            f"run `python -m src.db_setup` to recreate it"
+        )
+    return Container(row[0], None, "loose", DEFAULT_LOOSE_LOCATION)
+
+
+def deck_container(conn: sqlite3.Connection, deck_id: int) -> Container:
+    row = conn.execute("SELECT name FROM decks WHERE id = ?", (deck_id,)).fetchone()
+    if row is None:
+        raise StorageError(f"no deck with id {deck_id}")
+    return Container(None, deck_id, DECK_KIND, row[0])
+
+
+def resolve_container(
+    conn: sqlite3.Connection,
+    name: str | None = None,
+    kind: str | None = None,
+    allow_deck: bool = True,
+) -> Container:
+    """Find a container by name. No name means the built-in loose pile.
+
+    A bare name may match a location *and* a deck, or two locations of
+    different kinds. Rather than guess, that raises and asks for `--kind` —
+    the same refusal-to-guess as D-017.
     """
-    clean = name.strip()
+    if name is None or not str(name).strip():
+        return loose_container(conn)
+    clean = str(name).strip()
+
     if kind is not None:
-        _require_kind(kind)
+        _require_kind(kind, allow_deck)
+        if kind == DECK_KIND:
+            rows = conn.execute("SELECT id FROM decks WHERE name = ?", (clean,)).fetchall()
+            if not rows:
+                raise StorageError(f"no deck named {clean!r}")
+            if len(rows) > 1:
+                ids = ", ".join(str(r[0]) for r in rows)
+                raise StorageError(
+                    f"{len(rows)} decks are named {clean!r} - use an id instead ({ids})"
+                )
+            return Container(None, rows[0][0], DECK_KIND, clean)
         row = conn.execute(
             "SELECT id FROM storage_locations WHERE name = ? AND kind = ?", (clean, kind)
         ).fetchone()
         if row is None:
             raise StorageError(f"no {kind} named {clean!r} - create it with `location add`")
-        return row[0]
+        return Container(row[0], None, kind, clean)
 
-    rows = conn.execute(
-        "SELECT id, kind FROM storage_locations WHERE name = ? ORDER BY kind", (clean,)
-    ).fetchall()
-    if not rows:
-        raise StorageError(f"no storage location named {clean!r} - create it with `location add`")
-    if len(rows) > 1:
-        raise AmbiguousLocation(clean, [k for _, k in rows])
-    return rows[0][0]
-
-
-def _require_kind(kind: str) -> str:
-    if kind not in LOCATION_KINDS:
-        raise StorageError(f"unknown location kind {kind!r} - one of {', '.join(LOCATION_KINDS)}")
-    return kind
-
-
-def _require_card(conn: sqlite3.Connection, card_image_id: str) -> str:
-    row = conn.execute(
-        "SELECT base_card_id FROM cards WHERE card_image_id = ?", (card_image_id,)
-    ).fetchone()
-    if row is None:
-        raise StorageError(f"unknown printing {card_image_id!r} - not in the card database")
-    return row[0]
-
-
-def _overplacement_warning(conn: sqlite3.Connection, card_image_id: str, base_card_id: str) -> str | None:
-    """Flag bookkeeping that can't be physically true. Never blocks."""
-    owned = conn.execute(
-        "SELECT COALESCE(quantity, 0) FROM collection WHERE card_image_id = ?",
-        (card_image_id,),
-    ).fetchone()
-    owned = owned[0] if owned else 0
-    placed = conn.execute(
-        "SELECT COALESCE(SUM(quantity), 0) FROM collection_placements WHERE card_image_id = ?",
-        (card_image_id,),
-    ).fetchone()[0]
-
-    if placed > owned:
-        return (
-            f"{card_image_id}: {placed} placed but only {owned} owned - "
-            f"check the quantities"
+    matches = [
+        Container(loc_id, None, loc_kind, clean)
+        for loc_id, loc_kind in conn.execute(
+            "SELECT id, kind FROM storage_locations WHERE name = ? ORDER BY kind", (clean,)
         )
+    ]
+    if allow_deck:
+        matches += [
+            Container(None, deck_id, DECK_KIND, clean)
+            for (deck_id,) in conn.execute(
+                "SELECT id FROM decks WHERE name = ? ORDER BY id", (clean,)
+            )
+        ]
 
-    # Gameplay-level check: copies sleeved into physical decks aren't loose, so
-    # they can't also be in a binder.
-    total_owned = conn.execute(
-        "SELECT COALESCE(SUM(col.quantity), 0) FROM collection col "
-        "JOIN cards c ON c.card_image_id = col.card_image_id WHERE c.base_card_id = ?",
-        (base_card_id,),
-    ).fetchone()[0]
-    committed = conn.execute(
-        "SELECT COALESCE(SUM(dc.quantity), 0) FROM deck_cards dc "
-        "JOIN decks d ON d.id = dc.deck_id WHERE d.is_physical = 1 AND dc.base_card_id = ?",
-        (base_card_id,),
-    ).fetchone()[0]
-    total_placed = conn.execute(
-        "SELECT COALESCE(SUM(cp.quantity), 0) FROM collection_placements cp "
-        "JOIN cards c ON c.card_image_id = cp.card_image_id WHERE c.base_card_id = ?",
-        (base_card_id,),
-    ).fetchone()[0]
-
-    loose = total_owned - committed
-    if total_placed > loose:
-        return (
-            f"{base_card_id}: {total_placed} placed but only {loose} loose "
-            f"({committed} sleeved in physical decks)"
+    if not matches:
+        raise StorageError(
+            f"no location or deck named {clean!r} - create it with `location add`"
+            if allow_deck
+            else f"no storage location named {clean!r} - create it with `location add`"
         )
-    return None
+    if len(matches) > 1:
+        raise AmbiguousLocation(clean, [m.kind for m in matches])
+    return matches[0]
 
 
 # --------------------------------------------------------------------------
 # locations
 # --------------------------------------------------------------------------
+
+def _refuse_if_builtin(name: str, verb: str) -> None:
+    if name.strip() == DEFAULT_LOOSE_LOCATION:
+        raise StorageError(
+            f"{DEFAULT_LOOSE_LOCATION!r} is built in and cannot be {verb} - "
+            f"every command with no container named falls back to it"
+        )
+
 
 def add_location(
     conn: sqlite3.Connection,
@@ -164,13 +193,11 @@ def add_location(
 
 def list_locations(conn: sqlite3.Connection, kind: str | None = None) -> list[LocationSummary]:
     sql = [
-        # SUM(CASE ...) rather than COUNT(...) FILTER: FILTER needs SQLite 3.30+
-        # and this should run anywhere Python does.
         "SELECT sl.id, sl.name, sl.kind, sl.notes, ",
-        "       COALESCE(SUM(CASE WHEN cp.quantity > 0 THEN 1 ELSE 0 END), 0), ",
+        "       COUNT(DISTINCT cp.base_card_id), ",
         "       COALESCE(SUM(cp.quantity), 0) ",
         "FROM storage_locations sl ",
-        "LEFT JOIN collection_placements cp ON cp.location_id = sl.id ",
+        "LEFT JOIN copies cp ON cp.location_id = sl.id ",
     ]
     params: list = []
     if kind is not None:
@@ -187,6 +214,8 @@ def rename_location(
     clean = new_name.strip()
     if not clean:
         raise StorageError("location name cannot be empty")
+    _refuse_if_builtin(old_name, "renamed")
+    _refuse_if_builtin(clean, "used as a new name")
     loc_id = _location_id(conn, old_name, kind)
     try:
         conn.execute("UPDATE storage_locations SET name = ? WHERE id = ?", (clean, loc_id))
@@ -196,108 +225,52 @@ def rename_location(
 
 
 def delete_location(conn: sqlite3.Connection, name: str, kind: str | None = None) -> int:
-    """Delete a location. Placements cascade; ownership is untouched.
+    """Delete a location. Its copies move to just-loose; you still own them.
 
-    Returns how many placement rows went with it.
+    Returns how many copies were moved. The foreign key has no cascade for
+    exactly this reason — deleting a binder must never destroy the cards in it.
     """
-    loc_id = _location_id(conn, name, kind)
-    count = conn.execute(
-        "SELECT COUNT(*) FROM collection_placements WHERE location_id = ?", (loc_id,)
-    ).fetchone()[0]
-    conn.execute("DELETE FROM storage_locations WHERE id = ?", (loc_id,))
-    conn.commit()
-    return count
+    _refuse_if_builtin(name, "deleted")
+    container = resolve_container(conn, name, kind, allow_deck=False)
+    # Imported here, not at module scope: collection imports this module for
+    # Container and the loose pile, so a top-level import would be circular.
+    from src.collection import empty_container
+
+    try:
+        moved = empty_container(conn, container)
+        conn.execute("DELETE FROM storage_locations WHERE id = ?", (container.location_id,))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return moved
 
 
 # --------------------------------------------------------------------------
-# placements
+# contents
 # --------------------------------------------------------------------------
-
-def place(
-    conn: sqlite3.Connection,
-    card_image_id: str,
-    location: str,
-    quantity: int,
-    kind: str | None = None,
-) -> PlaceResult:
-    """Record that `quantity` copies of a printing sit in `location`.
-
-    Absolute, not additive — placing 2 twice leaves 2, so re-running a stocktake
-    is safe. Quantity 0 removes the placement row.
-    """
-    if quantity < 0:
-        raise StorageError("quantity cannot be negative")
-
-    base_card_id = _require_card(conn, card_image_id)
-    loc_id = _location_id(conn, location, kind)
-
-    if quantity == 0:
-        conn.execute(
-            "DELETE FROM collection_placements WHERE card_image_id = ? AND location_id = ?",
-            (card_image_id, loc_id),
-        )
-    else:
-        conn.execute(
-            "INSERT INTO collection_placements (card_image_id, location_id, quantity) "
-            "VALUES (?, ?, ?) ON CONFLICT(card_image_id, location_id) DO UPDATE SET "
-            "quantity = excluded.quantity, updated_at = CURRENT_TIMESTAMP",
-            (card_image_id, loc_id, quantity),
-        )
-    conn.commit()
-    return PlaceResult(quantity, _overplacement_warning(conn, card_image_id, base_card_id))
-
-
-def unplace(
-    conn: sqlite3.Connection,
-    card_image_id: str,
-    location: str,
-    quantity: int | None = None,
-    kind: str | None = None,
-) -> int:
-    """Remove copies from a location. `quantity=None` removes all of them.
-
-    Returns the quantity remaining at that location.
-    """
-    _require_card(conn, card_image_id)
-    loc_id = _location_id(conn, location, kind)
-
-    row = conn.execute(
-        "SELECT quantity FROM collection_placements WHERE card_image_id = ? AND location_id = ?",
-        (card_image_id, loc_id),
-    ).fetchone()
-    if row is None:
-        return 0
-
-    remaining = 0 if quantity is None else max(0, row[0] - quantity)
-    if remaining == 0:
-        conn.execute(
-            "DELETE FROM collection_placements WHERE card_image_id = ? AND location_id = ?",
-            (card_image_id, loc_id),
-        )
-    else:
-        conn.execute(
-            "UPDATE collection_placements SET quantity = ?, updated_at = CURRENT_TIMESTAMP "
-            "WHERE card_image_id = ? AND location_id = ?",
-            (remaining, card_image_id, loc_id),
-        )
-    conn.commit()
-    return remaining
-
 
 def contents(
     conn: sqlite3.Connection,
-    location: str,
+    location: str | None = None,
     limit: int | None = None,
     kind: str | None = None,
 ) -> list[tuple]:
-    """What's in a location: (card_image_id, name, quantity)."""
-    loc_id = _location_id(conn, location, kind)
+    """What's in a container: (base_card_id, card_image_id, name, quantity).
+
+    `card_image_id` is None for copies whose art hasn't been sorted yet.
+    """
+    container = resolve_container(conn, location, kind)
     sql = (
-        "SELECT cp.card_image_id, c.name, cp.quantity FROM collection_placements cp "
-        "JOIN cards c ON c.card_image_id = cp.card_image_id "
-        "WHERE cp.location_id = ? AND cp.quantity > 0 ORDER BY cp.card_image_id"
+        "SELECT cp.base_card_id, cp.card_image_id, "
+        "       COALESCE(c.name, (SELECT MIN(c2.name) FROM cards c2 "
+        "                         WHERE c2.base_card_id = cp.base_card_id)), "
+        "       cp.quantity "
+        "FROM copies cp LEFT JOIN cards c ON c.card_image_id = cp.card_image_id "
+        "WHERE cp.location_id IS ? AND cp.deck_id IS ? "
+        "ORDER BY cp.base_card_id, (cp.card_image_id IS NOT NULL), cp.card_image_id"
     )
-    params: list = [loc_id]
+    params: list = [container.location_id, container.deck_id]
     if limit:
         sql += " LIMIT ?"
         params.append(limit)

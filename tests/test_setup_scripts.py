@@ -16,6 +16,7 @@ from unittest import mock
 
 from src import db_setup, known_types
 from src.db_setup import (
+    INDEXES,
     LEGACY_VIEW_NAMES,
     TABLE_NAMES,
     VIEWS,
@@ -88,13 +89,15 @@ class SchemaCreationTests(unittest.TestCase):
         create_schema(self.conn)
 
     def test_indexes_created(self):
+        """Every declared index lands. Counted from the declaration, not a
+        magic number, so adding one doesn't fail an unrelated test."""
         create_schema(self.conn)
         indexes = {
             r[0] for r in self.conn.execute(
                 "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_%'"
             )
         }
-        self.assertEqual(len(indexes), 14)
+        self.assertEqual(len(indexes), len(INDEXES))
 
 
 class ConnectTests(unittest.TestCase):

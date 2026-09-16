@@ -1,12 +1,13 @@
 """Command-line interface for the collection and deck manager.
 
     python -m src.cli deck import mydeck.txt --name "Red Luffy" --physical
-    python -m src.cli deck list
     python -m src.cli deck show "Red Luffy"
-    python -m src.cli collection add OP05-097_p1 3
+    python -m src.cli collection add OP05-097 4              # unsorted, into just-loose
+    python -m src.cli collection move OP05-097 2 --to "Binder A"
+    python -m src.cli collection set-art OP05-097 1 p1 --in "Binder A"
     python -m src.cli collection show OP05-097
-    python -m src.cli location add "Binder A"
-    python -m src.cli place OP05-097 "Binder A" 2
+    python -m src.cli location show "Binder A"
+    python -m src.cli loan OP05-097 1 "Marco"
 
 Every command takes --db to point at a different SQLite file.
 """
@@ -102,24 +103,28 @@ def cmd_deck_show(conn: sqlite3.Connection, args) -> int:
     detail = show_deck(conn, args.deck)
     kind = "physical" if detail.is_physical else "wishlist"
     status = "complete" if detail.is_complete else f"missing {detail.missing_total}"
+    if detail.is_physical:
+        status += " - built" if detail.is_built else f" - {detail.unsleeved_total} not sleeved"
     print(f"{detail.name}  [{kind}]  {detail.total_cards} cards - {status}")
     print()
-    print(f"  {'card':<14} {'need':>4} {'own':>4} {'avail':>5} {'miss':>4}  name")
+    print(f"  {'card':<14} {'need':>4} {'in':>4} {'own':>4} {'avail':>5} {'miss':>4}  name")
     for c in detail.cards:
         marker = "L" if c.is_leader else " "
+        extra = "  (not in the recipe)" if c.needed == 0 else ""
         print(
-            f"{marker} {c.base_card_id:<14} {c.needed:>4} {c.owned:>4} "
-            f"{max(0, c.available_to_deck):>5} {c.missing:>4}  {c.name}"
+            f"{marker} {c.base_card_id:<14} {c.needed:>4} {c.in_deck:>4} {c.owned:>4} "
+            f"{max(0, c.available_to_deck):>5} {c.missing:>4}  {c.name}{extra}"
         )
-    if not detail.is_complete:
-        print()
-        print("  'avail' counts copies not committed to OTHER physical decks.")
+    print()
+    print("  'in' is copies actually sleeved into this deck; 'avail' counts copies")
+    print("  not sleeved into OTHER physical decks.")
     return 0
 
 
 def cmd_deck_delete(conn: sqlite3.Connection, args) -> int:
-    name = delete_deck(conn, args.deck)
-    print(f"deleted deck {name!r}. Your collection is unchanged.")
+    result = delete_deck(conn, args.deck)
+    print(f"deleted deck {result.name!r}. "
+          f"{result.copies_returned} copies went back to just-loose.")
     return 0
 
 
@@ -136,20 +141,45 @@ def cmd_deck_set_physical(conn: sqlite3.Connection, args) -> int:
 # --------------------------------------------------------------------------
 
 def cmd_collection_add(conn: sqlite3.Connection, args) -> int:
-    total = coll.add(conn, args.card_image_id, args.quantity)
-    print(f"{args.card_image_id}: now {total}")
-    return 0
-
-
-def cmd_collection_set(conn: sqlite3.Connection, args) -> int:
-    total = coll.set_quantity(conn, args.card_image_id, args.quantity)
-    print(f"{args.card_image_id}: now {total}")
+    to = store.resolve_container(conn, args.to, args.kind)
+    total = coll.add(conn, args.base_card_id, args.quantity, args.art, to)
+    art = args.art or "unsorted"
+    print(f"{args.base_card_id}: +{args.quantity} {art} into {to.name} - now {total} owned")
     return 0
 
 
 def cmd_collection_remove(conn: sqlite3.Connection, args) -> int:
-    total = coll.remove(conn, args.card_image_id, args.quantity)
-    print(f"{args.card_image_id}: now {total}")
+    frm = store.resolve_container(conn, getattr(args, "from"), args.kind)
+    total = coll.remove(conn, args.base_card_id, args.quantity, args.art, frm)
+    print(f"{args.base_card_id}: -{args.quantity} from {frm.name} - now {total} owned")
+    return 0
+
+
+def cmd_collection_move(conn: sqlite3.Connection, args) -> int:
+    frm = store.resolve_container(conn, getattr(args, "from"), args.from_kind)
+    to = store.resolve_container(conn, args.to, args.to_kind)
+    now_there = coll.move(conn, args.base_card_id, args.quantity, frm, to, args.art)
+    print(f"{args.base_card_id}: {args.quantity} moved {frm.name} -> {to.name} "
+          f"({now_there} there now)")
+    return 0
+
+
+def cmd_collection_set_art(conn: sqlite3.Connection, args) -> int:
+    where = store.resolve_container(conn, args.location, args.kind)
+    unsorted_left = coll.set_art(
+        conn, args.base_card_id, args.quantity, args.art, where, args.from_art
+    )
+    print(f"{args.base_card_id}: {args.quantity} in {where.name} recorded as {args.art} "
+          f"({unsorted_left} still unsorted there)")
+    return 0
+
+
+def cmd_loan(conn: sqlite3.Connection, args) -> int:
+    frm = store.resolve_container(conn, getattr(args, "from"), args.from_kind)
+    to = store.resolve_container(conn, args.to_whom, "loan")
+    now_there = coll.move(conn, args.base_card_id, args.quantity, frm, to, args.art)
+    print(f"{args.base_card_id}: {args.quantity} loaned to {to.name} "
+          f"({now_there} out with them). You still own them.")
     return 0
 
 
@@ -159,40 +189,45 @@ def cmd_collection_show(conn: sqlite3.Connection, args) -> int:
         print(f"no card with id {args.base_card_id!r}")
         return 1
 
-    print(f"{status.base_card_id}  owned {status.total_owned}")
-    for p in status.printings:
-        tag = p.printing_variant or "base"
-        line = f"  {p.card_image_id:<18} {tag:<5} {p.owned:>3}"
-        if p.placements:
-            line += "   " + ", ".join(f"{pl.location} {pl.quantity}" for pl in p.placements)
-        print(line)
+    print(f"{status.base_card_id}  {status.name}  -  owned {status.total_owned}")
 
-    if status.decks:
-        print()
-        for d in status.decks:
-            kind = "physical" if d.is_physical else "wishlist"
-            print(f"  {d.deck_name:<24} {d.quantity:>3}  ({kind})")
+    if status.arts:
+        print("\n  by art")
+        for a in status.arts:
+            tag = a.card_image_id or "(unsorted)"
+            variant = a.printing_variant or ("-" if a.card_image_id else "")
+            print(f"    {tag:<34} {variant:<8} {a.quantity:>3}")
 
-    print()
-    if status.unplaced < 0:
-        # More copies are recorded in locations than are actually loose.
-        print(f"  committed {status.committed}   loose {status.loose}   placed {status.placed}")
-        warn([f"{-status.unplaced} more copies placed in locations than are loose"])
-    else:
-        print(f"  committed {status.committed}   loose {status.loose}   unplaced {status.unplaced}")
+    if status.holdings:
+        print("\n  where they are")
+        for h in status.holdings:
+            art = h.card_image_id or "unsorted"
+            print(f"    {h.container:<24} {h.kind:<8} {art:<34} {h.quantity:>3}")
+
+    unowned = [p for p in status.printings
+               if p.card_image_id not in {a.card_image_id for a in status.arts}]
+    if unowned:
+        print(f"\n  {len(unowned)} other printing(s) exist that you don't own")
+
+    print(f"\n  committed {status.committed}   loose {status.loose}   "
+          f"unsorted {status.unsorted}")
     return 0
 
 
 def cmd_collection_list(conn: sqlite3.Connection, args) -> int:
     rows = coll.list_cards(
-        conn, args.set, args.color, args.category, args.owned_only, args.limit
+        conn, args.set, args.color, args.category, args.owned_only, args.limit, args.search
     )
     if not rows:
         print("no cards matched")
         return 0
-    for card_image_id, name, category, color, owned in rows:
-        print(f"  {card_image_id:<18} {owned:>3}  {category:<10} {color or '-':<12} {name}")
-    print(f"\n  {len(rows)} card(s)")
+    for card_image_id, name, category, color, owned, card_owned in rows:
+        unsorted = card_owned - owned
+        tail = f"  (+{unsorted} unsorted on the card)" if unsorted and owned else ""
+        if not owned and unsorted:
+            tail = f"  ({card_owned} owned, art not recorded)"
+        print(f"  {card_image_id:<24} {owned:>3}  {category:<10} {color or '-':<12} {name}{tail}")
+    print(f"\n  {len(rows)} printing(s)")
     return 0
 
 
@@ -228,24 +263,21 @@ def cmd_location_rename(conn: sqlite3.Connection, args) -> int:
 
 
 def cmd_location_delete(conn: sqlite3.Connection, args) -> int:
-    removed = store.delete_location(conn, args.name, args.kind)
-    print(f"deleted location {args.name!r} ({removed} placement rows). You still own the cards.")
+    moved = store.delete_location(conn, args.name, args.kind)
+    print(f"deleted location {args.name!r}. {moved} copies went back to just-loose.")
     return 0
 
 
-def cmd_place(conn: sqlite3.Connection, args) -> int:
-    result = store.place(conn, args.card_image_id, args.location, args.quantity, args.kind)
-    print(f"{args.card_image_id} in {args.location!r}: {result.quantity}")
-    if result.warning:
-        warn([result.warning])
-    return 0
-
-
-def cmd_unplace(conn: sqlite3.Connection, args) -> int:
-    remaining = store.unplace(
-        conn, args.card_image_id, args.location, args.quantity, args.kind
-    )
-    print(f"{args.card_image_id} in {args.location!r}: {remaining}")
+def cmd_location_show(conn: sqlite3.Connection, args) -> int:
+    rows = store.contents(conn, args.name, args.limit, args.kind)
+    container = store.resolve_container(conn, args.name, args.kind)
+    if not rows:
+        print(f"{container.name} is empty")
+        return 0
+    for base_card_id, card_image_id, name, quantity in rows:
+        art = card_image_id or "(unsorted)"
+        print(f"  {base_card_id:<14} {art:<34} {quantity:>3}  {name}")
+    print(f"\n  {sum(r[3] for r in rows)} copies, {len({r[0] for r in rows})} card(s)")
     return 0
 
 
@@ -295,24 +327,55 @@ def build_parser() -> argparse.ArgumentParser:
         dest="action", required=True
     )
 
-    for verb, func, helptext in [
-        ("add", cmd_collection_add, "add copies of a printing"),
-        ("set", cmd_collection_set, "set an absolute quantity"),
-        ("remove", cmd_collection_remove, "remove copies (row is kept at 0)"),
-    ]:
-        p = col.add_parser(verb, help=helptext)
-        p.add_argument("card_image_id", help="printing id, e.g. OP05-097_p1")
-        p.add_argument("quantity", type=int)
-        p.set_defaults(func=func)
+    container_help = f"one of: {', '.join(store.CONTAINER_KINDS)}"
+    art_help = "printing: a full id (OP05-097_p1), a variant (p1), or 'base'"
 
-    p = col.add_parser("show", help="every printing of one card, with decks and locations")
+    p = col.add_parser("add", help="record copies you now own")
+    p.add_argument("base_card_id", help="gameplay id, e.g. OP05-097")
+    p.add_argument("quantity", type=int)
+    p.add_argument("--art", default=None, help=art_help + "; omit if not sorted yet")
+    p.add_argument("--to", default=None, help="container (default: just-loose)")
+    p.add_argument("--kind", choices=store.CONTAINER_KINDS, default=None, help=container_help)
+    p.set_defaults(func=cmd_collection_add)
+
+    p = col.add_parser("remove", help="copies leaving the collection - sold, traded, lost")
+    p.add_argument("base_card_id", help="gameplay id, e.g. OP05-097")
+    p.add_argument("quantity", type=int)
+    p.add_argument("--art", default=None, help=art_help)
+    p.add_argument("--from", default=None, help="container (default: just-loose)")
+    p.add_argument("--kind", choices=store.CONTAINER_KINDS, default=None, help=container_help)
+    p.set_defaults(func=cmd_collection_remove)
+
+    p = col.add_parser("move", help="move copies between containers")
+    p.add_argument("base_card_id", help="gameplay id, e.g. OP05-097")
+    p.add_argument("quantity", type=int)
+    p.add_argument("--from", default=None, help="source (default: just-loose)")
+    p.add_argument("--to", required=True, help="destination location or deck")
+    p.add_argument("--art", default=None, help=art_help)
+    p.add_argument("--from-kind", choices=store.CONTAINER_KINDS, default=None, help=container_help)
+    p.add_argument("--to-kind", choices=store.CONTAINER_KINDS, default=None, help=container_help)
+    p.set_defaults(func=cmd_collection_move)
+
+    p = col.add_parser("set-art", help="sort copies: say which printing some of them are")
+    p.add_argument("base_card_id", help="gameplay id, e.g. OP05-097")
+    p.add_argument("quantity", type=int)
+    p.add_argument("art", help=art_help)
+    p.add_argument("--in", dest="location", default=None,
+                   help="container holding them (default: just-loose)")
+    p.add_argument("--from-art", default=None,
+                   help="re-sort copies already recorded as this art")
+    p.add_argument("--kind", choices=store.CONTAINER_KINDS, default=None, help=container_help)
+    p.set_defaults(func=cmd_collection_set_art)
+
+    p = col.add_parser("show", help="one card: how many, which arts, where they are")
     p.add_argument("base_card_id", help="gameplay id, e.g. OP05-097")
     p.set_defaults(func=cmd_collection_show)
 
     p = col.add_parser("list", help="browse cards")
-    p.add_argument("--set", help="set code, e.g. OP-05")
+    p.add_argument("--set", help="set code, e.g. OP05")
     p.add_argument("--color")
     p.add_argument("--category", help="Leader, Character, Event or Stage")
+    p.add_argument("--search", default=None, help="match part of a card name")
     p.add_argument("--owned-only", action="store_true")
     p.add_argument("--limit", type=int, default=50)
     p.set_defaults(func=cmd_collection_list)
@@ -342,25 +405,27 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--kind", choices=store.LOCATION_KINDS, default=None, help=kind_help)
     p.set_defaults(func=cmd_location_rename)
 
-    p = loc.add_parser("delete", help="delete a location (ownership untouched)")
+    p = loc.add_parser("delete", help="delete a location (its copies return to just-loose)")
     p.add_argument("name")
     p.add_argument("--kind", choices=store.LOCATION_KINDS, default=None, help=kind_help)
     p.set_defaults(func=cmd_location_delete)
 
-    # ---- placements -----------------------------------------------------
-    p = sub.add_parser("place", help="record where copies of a printing are")
-    p.add_argument("card_image_id")
-    p.add_argument("location")
-    p.add_argument("quantity", type=int)
-    p.add_argument("--kind", choices=store.LOCATION_KINDS, default=None, help=kind_help)
-    p.set_defaults(func=cmd_place)
+    p = loc.add_parser("show", help="what's in a location or deck")
+    p.add_argument("name", nargs="?", default=None, help="default: just-loose")
+    p.add_argument("--kind", choices=store.CONTAINER_KINDS, default=None,
+                   help=f"one of: {', '.join(store.CONTAINER_KINDS)}")
+    p.add_argument("--limit", type=int, default=None)
+    p.set_defaults(func=cmd_location_show)
 
-    p = sub.add_parser("unplace", help="remove copies from a location")
-    p.add_argument("card_image_id")
-    p.add_argument("location")
-    p.add_argument("quantity", type=int, nargs="?", default=None)
-    p.add_argument("--kind", choices=store.LOCATION_KINDS, default=None, help=kind_help)
-    p.set_defaults(func=cmd_unplace)
+    # ---- loans ----------------------------------------------------------
+    p = sub.add_parser("loan", help="lend copies to someone (you still own them)")
+    p.add_argument("base_card_id", help="gameplay id, e.g. OP05-097")
+    p.add_argument("quantity", type=int)
+    p.add_argument("to_whom", help="a location of kind 'loan' - create it with `location add`")
+    p.add_argument("--art", default=None, help="which printing is going out")
+    p.add_argument("--from", default=None, help="source (default: just-loose)")
+    p.add_argument("--from-kind", choices=store.CONTAINER_KINDS, default=None)
+    p.set_defaults(func=cmd_loan)
 
     return parser
 

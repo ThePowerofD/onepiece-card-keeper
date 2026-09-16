@@ -239,7 +239,10 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(stats, {"total": 0, "inserted": 0, "skipped": 0,
                                  "unknown_types": 0, "repaired": 0,
                                  "collisions": 0, "exact_duplicates": 0,
-                                 "re_identified": 0})
+                                 "re_identified": 0, "cards_reconciled": 0,
+                                 "fields_rewritten": 0, "implausible_counters": 0,
+                                 "errata_outranks_base": 0,
+                                 "overridden": 0})
 
     def test_garbage_rows_do_not_crash_the_sync(self):
         rows = [api_row(), {}, {"card_image_id": "X"}, api_row(card_name=None)]

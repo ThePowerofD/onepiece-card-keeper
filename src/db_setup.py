@@ -75,16 +75,6 @@ TABLES: list[str] = [
     )
     """,
     """
-    CREATE TABLE IF NOT EXISTS collection (
-        id             INTEGER PRIMARY KEY AUTOINCREMENT,
-        card_image_id  TEXT NOT NULL REFERENCES cards(card_image_id),
-        quantity       INTEGER NOT NULL DEFAULT 0 CHECK(quantity >= 0),
-        foil_quantity  INTEGER NOT NULL DEFAULT 0 CHECK(foil_quantity >= 0),
-        updated_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(card_image_id)
-    )
-    """,
-    """
     CREATE TABLE IF NOT EXISTS storage_locations (
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
         name       TEXT NOT NULL,
@@ -96,16 +86,6 @@ TABLES: list[str] = [
         -- reasonably be called 'Box 1'. Decks are the fifth category and live
         -- in `decks`, not here.
         UNIQUE(name, kind)
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS collection_placements (
-        id            INTEGER PRIMARY KEY AUTOINCREMENT,
-        card_image_id TEXT NOT NULL REFERENCES cards(card_image_id),
-        location_id   INTEGER NOT NULL REFERENCES storage_locations(id) ON DELETE CASCADE,
-        quantity      INTEGER NOT NULL DEFAULT 0 CHECK(quantity >= 0),
-        updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(card_image_id, location_id)
     )
     """,
     """
@@ -129,12 +109,39 @@ TABLES: list[str] = [
     )
     """,
     """
+    -- Ownership is the set of copies, and every copy is in exactly one
+    -- container: a storage location or a physical deck (D-030). The total you
+    -- own is SUM(quantity); there is no separate count to keep in agreement.
+    --
+    -- card_image_id NULL means the art hasn't been sorted yet. Setting the art
+    -- on some copies splits the row; the total never changes.
+    --
+    -- Neither foreign key cascades on purpose: deleting a location or a deck
+    -- must *move* its copies to just-loose, never destroy them, so the FK
+    -- refuses until the caller has done that.
+    CREATE TABLE IF NOT EXISTS copies (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        base_card_id  TEXT NOT NULL,
+        card_image_id TEXT REFERENCES cards(card_image_id),
+        location_id   INTEGER REFERENCES storage_locations(id),
+        deck_id       INTEGER REFERENCES decks(id),
+        quantity      INTEGER NOT NULL CHECK(quantity > 0),
+        updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        CHECK ((location_id IS NULL) != (deck_id IS NULL))
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS app_settings (
         key    TEXT PRIMARY KEY,
         value  TEXT
     )
     """,
 ]
+
+#: The built-in loose pile. Copies land here when no container is named, and
+#: are taken from here when none is named (D-030). Not renamable or deletable;
+#: the owner can add other loose locations alongside it.
+DEFAULT_LOOSE_LOCATION = "just-loose"
 
 INDEXES: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_cards_base_card_id ON cards(base_card_id)",
@@ -148,8 +155,14 @@ INDEXES: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_cards_banish ON cards(has_banish)",
     "CREATE INDEX IF NOT EXISTS idx_card_types_base_card_id ON card_types(base_card_id)",
     "CREATE INDEX IF NOT EXISTS idx_card_types_type_name ON card_types(type_name)",
-    "CREATE INDEX IF NOT EXISTS idx_placements_card ON collection_placements(card_image_id)",
-    "CREATE INDEX IF NOT EXISTS idx_placements_location ON collection_placements(location_id)",
+    "CREATE INDEX IF NOT EXISTS idx_copies_base ON copies(base_card_id)",
+    "CREATE INDEX IF NOT EXISTS idx_copies_location ON copies(location_id)",
+    "CREATE INDEX IF NOT EXISTS idx_copies_deck ON copies(deck_id)",
+    # One row per (card, art, container). COALESCE is required: SQLite treats
+    # NULLs as distinct in a plain UNIQUE, so unsorted rows would duplicate.
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_copies_slot ON copies("
+    "  base_card_id, COALESCE(card_image_id, ''),"
+    "  COALESCE(location_id, -1), COALESCE(deck_id, -1))",
     "CREATE INDEX IF NOT EXISTS idx_locations_kind ON storage_locations(kind)",
 ]
 
@@ -166,11 +179,10 @@ LEGACY_VIEW_NAMES = ["available_cards"]
 
 # Drop order: children before parents, so foreign keys never block a reset.
 TABLE_NAMES = [
+    "copies",
     "deck_cards",
     "decks",
-    "collection_placements",
     "storage_locations",
-    "collection",
     "skipped_cards_log",
     "unknown_type_log",
     "card_types",
@@ -178,6 +190,11 @@ TABLE_NAMES = [
     "cards",
     "app_settings",
 ]
+
+# Dropped on --reset but never created: `collection` and `collection_placements`
+# were replaced by `copies` in D-030. Listed first so they go before the tables
+# they reference. Delete this once no database predating D-030 is in use.
+LEGACY_TABLE_NAMES = ["collection_placements", "collection"]
 
 
 def connect(db_path: Path = DB_PATH) -> sqlite3.Connection:
@@ -190,7 +207,7 @@ def connect(db_path: Path = DB_PATH) -> sqlite3.Connection:
 def drop_all(conn: sqlite3.Connection) -> None:
     for name in LEGACY_VIEW_NAMES:
         conn.execute(f"DROP VIEW IF EXISTS {name}")
-    for name in TABLE_NAMES:
+    for name in LEGACY_TABLE_NAMES + TABLE_NAMES:
         conn.execute(f"DROP TABLE IF EXISTS {name}")
     conn.commit()
 
@@ -202,6 +219,10 @@ def create_schema(conn: sqlite3.Connection) -> None:
         conn.execute(stmt)
     for stmt in VIEWS:
         conn.execute(stmt)
+    conn.execute(
+        "INSERT OR IGNORE INTO storage_locations (name, kind, notes) VALUES (?, 'loose', ?)",
+        (DEFAULT_LOOSE_LOCATION, "built-in: copies with no container named"),
+    )
     conn.commit()
 
 

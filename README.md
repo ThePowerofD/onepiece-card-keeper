@@ -95,26 +95,32 @@ python -m src.cli deck import wanted.txt --name "Purple Doffy" --wishlist
 python -m src.cli deck list
 python -m src.cli deck show "Red Luffy"          # owned vs missing per card
 python -m src.cli deck set-physical "Purple Doffy"
-python -m src.cli deck delete "Red Luffy"        # collection untouched
+python -m src.cli deck delete "Red Luffy"        # copies return to just-loose
 
-# Collection — quantities are per printing (OP05-097 vs OP05-097_p1)
-python -m src.cli collection add OP05-097_p1 3
-python -m src.cli collection set OP05-097 4
-python -m src.cli collection remove OP05-097 1
-python -m src.cli collection show OP05-097       # all printings, decks, locations
-python -m src.cli collection list --set OP-05 --owned-only
+# Collection — you own gameplay cards; the art is optional detail
+python -m src.cli collection add OP05-097 4                  # unsorted, into just-loose
+python -m src.cli collection add OP05-097 2 --art p1 --to "Mewtwo Binder"
+python -m src.cli collection move OP05-097 2 --to "Mewtwo Binder"
+python -m src.cli collection move OP05-097 4 --from "Red Luffy" --from-kind deck --to just-loose
+python -m src.cli collection set-art OP05-097 1 p1 --in "Mewtwo Binder"
+python -m src.cli collection remove OP05-097 1               # sold or traded away
+python -m src.cli collection show OP05-097       # arts, containers, totals
+python -m src.cli collection list --set OP05 --owned-only
+python -m src.cli collection list --search "Luffy"
 
-# Storage — where the loose cards physically are.
+# Storage — where the copies physically are.
 # Every location has a --kind: storage | binder | loose | loan
 python -m src.cli location add "OP13 Box" --kind storage
 python -m src.cli location add "Mewtwo Binder" --kind binder --notes "alt arts"
 python -m src.cli location add "Friend 1" --kind loan
 python -m src.cli location list                  # grouped by kind
-python -m src.cli location list --kind loan      # just what's lent out
+python -m src.cli location show "Mewtwo Binder"  # what's in it, art by art
+python -m src.cli location show                  # defaults to just-loose
 python -m src.cli location rename "OP13 Box" "OP13 Storage"
-python -m src.cli location delete "OP13 Storage" # you still own the cards
-python -m src.cli place OP05-097 "Mewtwo Binder" 2
-python -m src.cli unplace OP05-097 "Mewtwo Binder" 1  # omit number to remove all
+python -m src.cli location delete "OP13 Storage" # copies return to just-loose
+
+# Loans — the card is still yours, it's just somewhere else
+python -m src.cli loan OP05-097 1 "Friend 1" --art p1
 ```
 
 **Names are unique per kind, not globally** — a box and a binder can both be
@@ -122,32 +128,45 @@ python -m src.cli unplace OP05-097 "Mewtwo Binder" 1  # omit number to remove al
 add `--kind` to say which you meant.
 
 ```
-$ place OP05-097 "Box 1" 2
+$ collection move OP05-097 2 --to "Box 1"
 error: 'Box 1' exists as binder and as storage - say which with --kind
 ```
 
+A deck can share a name with a location too, so `--kind deck` is available
+wherever a container is named.
+
 Every command takes `--db PATH` to work against a different database file.
 
-**A physical deck locks its cards** — they stop counting as available elsewhere.
-A wishlist deck locks nothing and reports what you're missing. Toggle with
-`deck set-physical`.
+**Every copy is somewhere.** Adding a card with no container puts it in
+`just-loose`, the built-in loose pile, and that's also where `remove` and `loan`
+take from unless you say otherwise. `just-loose` can't be renamed or deleted.
 
-**Import credits the base printing.** A decklist says `OP05-097` without saying
-which art is sleeved, so import assumes the plain printing. If you actually
-sleeved an alt art, fix it after: `collection set OP05-097 0` then
-`collection set OP05-097_p1 4`.
+**The art is optional.** A decklist names `OP05-097` without saying which art is
+sleeved, so imported copies stay *unsorted* rather than guessing the plain
+printing. Record the art later, where the copies actually are:
+`collection set-art OP05-097 1 p1 --in "Mewtwo Binder"`. It splits the row; your
+total never moves.
+
+**A physical deck holds real copies** — they stop counting as available
+elsewhere. It can also be **incomplete**: take four cards out to build another
+deck and `deck show` reports them as not sleeved until you put them back. A
+wishlist deck holds no copies and just reports what you're missing.
+
+**Nothing goes negative.** Moving or removing more than a container holds is an
+error that writes nothing, and tells you what's actually there.
 
 ### First run, in this order
 
-Order matters — you can't place a card you don't own yet, and you own nothing
-until a deck import credits you.
+You can't move a card you don't own yet, and you own nothing until a deck import
+or an `add` puts copies in.
 
 ```bash
 python -m src.cli deck import mydeck.txt --name "Red Luffy" --physical
 python -m src.cli location add "Binder A" --kind binder
-python -m src.cli place OP05-097 "Binder A" 2
-python -m src.cli collection show OP05-097   # now shows the placement
-python -m src.cli deck show "Red Luffy"      # owned vs missing
+python -m src.cli collection add OP05-097 2                  # into just-loose
+python -m src.cli collection move OP05-097 2 --to "Binder A"
+python -m src.cli collection show OP05-097   # where they are, and which arts
+python -m src.cli deck show "Red Luffy"      # owned, sleeved, missing
 ```
 
 ---

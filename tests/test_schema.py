@@ -1,8 +1,9 @@
-"""Schema tests — availability and the Phase 1 tables.
+"""Schema tests — the tables, and the constraints that keep `copies` honest.
 
-Availability encodes real business rules (D-009, D-010, D-003), so it gets
-tested like code. It is computed by `collection.show()`, not by SQL: D-026
-removed the `available_cards` view because it could not express them.
+Availability encodes real business rules (D-009, D-010, D-003) so it gets
+tested like code. It is computed by `collection.show()`, never stored: D-026
+removed the `available_cards` view, and D-030 removed the `collection` table
+that held the total.
 
 Run:
     python -m pytest tests/test_schema.py -v
@@ -13,8 +14,9 @@ from __future__ import annotations
 import sqlite3
 import unittest
 
-from src.collection import show
-from src.db_setup import create_schema
+from src.collection import add, move, show
+from src.db_setup import DEFAULT_LOOSE_LOCATION, create_schema
+from src.storage import deck_container, loose_container
 
 
 def make_db() -> sqlite3.Connection:
@@ -24,14 +26,16 @@ def make_db() -> sqlite3.Connection:
     return conn
 
 
-def add_card(conn, card_image_id, base_card_id, name="Test Card"):
+def add_card(conn, card_image_id, base_card_id, name="Test Card", variant=None):
     conn.execute(
-        "INSERT INTO cards (card_image_id, base_card_id, name, category) VALUES (?, ?, ?, 'Character')",
-        (card_image_id, base_card_id, name),
+        "INSERT INTO cards (card_image_id, base_card_id, printing_variant, name, category) "
+        "VALUES (?, ?, ?, ?, 'Character')",
+        (card_image_id, base_card_id, variant, name),
     )
+    conn.commit()
 
 
-def add_deck(conn, name, is_physical, cards):
+def add_deck(conn, name, is_physical, cards=()):
     cur = conn.execute(
         "INSERT INTO decks (name, is_physical) VALUES (?, ?)", (name, 1 if is_physical else 0)
     )
@@ -41,11 +45,12 @@ def add_deck(conn, name, is_physical, cards):
             "INSERT INTO deck_cards (deck_id, base_card_id, quantity) VALUES (?, ?, ?)",
             (deck_id, base_card_id, qty),
         )
+    conn.commit()
     return deck_id
 
 
 def available(conn, base_card_id):
-    """(owned, committed, available) for one gameplay card.
+    """(owned, committed, loose) for one gameplay card.
 
     Aggregated per base_card_id — the level commitment applies at (D-003).
     None only when the id isn't a real card at all.
@@ -53,7 +58,7 @@ def available(conn, base_card_id):
     status = show(conn, base_card_id)
     if status is None:
         return None
-    return (status.total_owned, status.committed, status.available)
+    return (status.total_owned, status.committed, status.loose)
 
 
 class SchemaShapeTests(unittest.TestCase):
@@ -63,14 +68,20 @@ class SchemaShapeTests(unittest.TestCase):
     def tearDown(self):
         self.conn.close()
 
-    def test_all_tables_and_view_exist(self):
+    def test_all_tables_exist(self):
         names = {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master")}
         for expected in [
             "cards", "card_types", "known_types", "unknown_type_log",
-            "skipped_cards_log", "collection", "decks", "deck_cards",
-            "app_settings", "storage_locations", "collection_placements",
+            "skipped_cards_log", "copies", "decks", "deck_cards",
+            "app_settings", "storage_locations",
         ]:
             self.assertIn(expected, names)
+
+    def test_tables_replaced_by_copies_are_gone(self):
+        """D-030: one ledger, not a total plus a placement breakdown."""
+        names = {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master")}
+        self.assertNotIn("collection", names)
+        self.assertNotIn("collection_placements", names)
 
     def test_cards_has_game_set_and_printing_kind(self):
         """D-028: the set a card belongs to, and what kind of printing it is."""
@@ -93,65 +104,134 @@ class SchemaShapeTests(unittest.TestCase):
             ).fetchone()[0]
         )
 
-    def test_collection_has_foil_quantity_defaulting_to_zero(self):
-        add_card(self.conn, "OP05-097", "OP05-097")
-        self.conn.execute(
-            "INSERT INTO collection (card_image_id, quantity) VALUES ('OP05-097', 3)"
-        )
+    def test_just_loose_is_seeded(self):
         row = self.conn.execute(
-            "SELECT quantity, foil_quantity FROM collection WHERE card_image_id = 'OP05-097'"
+            "SELECT kind FROM storage_locations WHERE name = ?", (DEFAULT_LOOSE_LOCATION,)
         ).fetchone()
-        self.assertEqual(row, (3, 0))
+        self.assertEqual(row[0], "loose")
 
     def test_create_schema_is_idempotent(self):
         create_schema(self.conn)  # must not raise
         create_schema(self.conn)
 
 
-class AvailabilityViewTests(unittest.TestCase):
+class CopiesConstraintTests(unittest.TestCase):
+    """The table has to make the impossible states unrepresentable."""
+
     def setUp(self):
         self.conn = make_db()
         add_card(self.conn, "OP05-097", "OP05-097", "Luffy")
-        self.conn.execute(
-            "INSERT INTO collection (card_image_id, quantity) VALUES ('OP05-097', 4)"
-        )
+        self.loose_id = loose_container(self.conn).location_id
+        self.deck_id = add_deck(self.conn, "Law", True)
 
     def tearDown(self):
         self.conn.close()
 
-    def test_all_available_when_no_decks(self):
+    def insert(self, **fields):
+        fields.setdefault("base_card_id", "OP05-097")
+        fields.setdefault("quantity", 1)
+        cols = ", ".join(fields)
+        marks = ", ".join("?" * len(fields))
+        self.conn.execute(f"INSERT INTO copies ({cols}) VALUES ({marks})", tuple(fields.values()))
+
+    def test_a_copy_needs_exactly_one_container(self):
+        self.insert(location_id=self.loose_id)          # fine
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.insert(location_id=self.loose_id, deck_id=self.deck_id)
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.insert()                                # neither
+
+    def test_quantity_must_be_positive(self):
+        """A row exists because copies exist; zero means delete the row."""
+        for bad in (0, -1):
+            with self.assertRaises(sqlite3.IntegrityError):
+                self.insert(location_id=self.loose_id, quantity=bad)
+
+    def test_one_row_per_card_art_and_container(self):
+        self.insert(location_id=self.loose_id, card_image_id="OP05-097")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.insert(location_id=self.loose_id, card_image_id="OP05-097")
+
+    def test_unsorted_rows_are_deduplicated_too(self):
+        """SQLite treats NULLs as distinct, so the index has to COALESCE them."""
+        self.insert(location_id=self.loose_id)
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.insert(location_id=self.loose_id)
+
+    def test_the_same_card_may_sit_in_several_containers(self):
+        self.insert(location_id=self.loose_id)
+        self.insert(deck_id=self.deck_id)
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM copies").fetchone()[0], 2
+        )
+
+    def test_sorted_and_unsorted_coexist_in_one_container(self):
+        add_card(self.conn, "OP05-097_p1", "OP05-097", "Luffy (Parallel)", "p1")
+        self.insert(location_id=self.loose_id)
+        self.insert(location_id=self.loose_id, card_image_id="OP05-097_p1")
+        self.assertEqual(
+            self.conn.execute("SELECT SUM(quantity) FROM copies").fetchone()[0], 2
+        )
+
+    def test_the_art_must_be_a_real_printing(self):
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.insert(location_id=self.loose_id, card_image_id="XX99-999")
+
+    def test_a_container_holding_copies_cannot_just_be_deleted(self):
+        """No cascade: deleting a binder must move its cards, never destroy them."""
+        self.insert(location_id=self.loose_id)
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.conn.execute(
+                "DELETE FROM storage_locations WHERE id = ?", (self.loose_id,)
+            )
+
+
+class AvailabilityTests(unittest.TestCase):
+    def setUp(self):
+        self.conn = make_db()
+        add_card(self.conn, "OP05-097", "OP05-097", "Luffy")
+        self.loose = loose_container(self.conn)
+        add(self.conn, "OP05-097", 4)
+
+    def tearDown(self):
+        self.conn.close()
+
+    def sleeve(self, deck_name, qty, physical=True):
+        deck = deck_container(self.conn, add_deck(self.conn, deck_name, physical))
+        move(self.conn, "OP05-097", qty, self.loose, deck)
+        return deck
+
+    def test_all_loose_when_no_decks(self):
         self.assertEqual(available(self.conn, "OP05-097"), (4, 0, 4))
 
-    def test_physical_deck_locks_cards(self):
-        add_deck(self.conn, "Red Luffy", True, [("OP05-097", 3)])
+    def test_a_physical_deck_commits_the_copies_in_it(self):
+        self.sleeve("Red Luffy", 3)
         self.assertEqual(available(self.conn, "OP05-097"), (4, 3, 1))
 
-    def test_wishlist_deck_locks_nothing(self):
-        add_deck(self.conn, "Someday", False, [("OP05-097", 4)])
+    def test_a_wishlist_deck_commits_nothing(self):
+        """Copies can sit in a wishlist deck's container without being committed."""
+        self.sleeve("Someday", 4, physical=False)
         self.assertEqual(available(self.conn, "OP05-097"), (4, 0, 4))
 
     def test_only_physical_decks_count_when_both_exist(self):
-        add_deck(self.conn, "Real", True, [("OP05-097", 2)])
-        add_deck(self.conn, "Wishlist", False, [("OP05-097", 4)])
+        self.sleeve("Real", 2)
+        self.sleeve("Wishlist", 1, physical=False)
         self.assertEqual(available(self.conn, "OP05-097"), (4, 2, 2))
 
     def test_multiple_physical_decks_sum(self):
-        add_deck(self.conn, "Deck A", True, [("OP05-097", 2)])
-        add_deck(self.conn, "Deck B", True, [("OP05-097", 1)])
+        self.sleeve("Deck A", 2)
+        self.sleeve("Deck B", 1)
         self.assertEqual(available(self.conn, "OP05-097"), (4, 3, 1))
 
-    def test_available_goes_negative_when_overcommitted(self):
-        # Availability reports the truth; the guard that prevents this lives in
-        # the collection commands (Task 1.4).
-        add_deck(self.conn, "Greedy", True, [("OP05-097", 6)])
-        self.assertEqual(available(self.conn, "OP05-097"), (4, 6, -2))
+    def test_you_cannot_commit_more_than_you_own(self):
+        """Structural under D-030: a committed copy *is* a copy you own."""
+        from src.collection import CollectionError
 
-    def test_cards_not_in_collection_report_zero(self):
-        """A real card you own none of is 0/0/0, not missing.
+        with self.assertRaises(CollectionError):
+            self.sleeve("Greedy", 6)
+        self.assertEqual(available(self.conn, "OP05-097"), (4, 0, 4))
 
-        The old view inner-joined `collection` and dropped such cards entirely,
-        which a card browser would have had to paper over (D-026).
-        """
+    def test_cards_you_own_none_of_report_zero(self):
         add_card(self.conn, "OP05-020", "OP05-020", "Zoro")
         self.assertEqual(available(self.conn, "OP05-020"), (0, 0, 0))
 
@@ -159,97 +239,31 @@ class AvailabilityViewTests(unittest.TestCase):
         self.assertIsNone(available(self.conn, "XX99-999"))
 
     def test_commitment_is_gameplay_level_and_counted_once(self):
-        """The case the deleted view got wrong (D-026).
+        """Owning several arts of one card must not multiply the commitment.
 
-        A deck says 'OP05-097' without naming a printing, so commitment is
-        gameplay-level while ownership is printing-level (D-003). The view
-        repeated the same committed figure on every printing row; `show()`
-        aggregates per base_card_id and subtracts it exactly once.
+        This is what the deleted view got wrong (D-026) and what keying
+        ownership on base_card_id makes structurally impossible (D-030).
         """
-        add_card(self.conn, "OP05-097_p1", "OP05-097", "Luffy (Parallel)")
-        self.conn.execute(
-            "INSERT INTO collection (card_image_id, quantity) VALUES ('OP05-097_p1', 2)"
-        )
-        add_deck(self.conn, "Red Luffy", True, [("OP05-097", 3)])
+        add_card(self.conn, "OP05-097_p1", "OP05-097", "Luffy (Parallel)", "p1")
+        add(self.conn, "OP05-097", 2, art="p1")
+        self.sleeve("Red Luffy", 3)
 
-        # 6 owned across two printings, 3 committed once → 3 genuinely free.
+        # 6 owned across two arts, 3 committed once -> 3 genuinely free.
         self.assertEqual(available(self.conn, "OP05-097"), (6, 3, 3))
 
-        # Both printings are reported, and ownership stays printing-level.
         status = show(self.conn, "OP05-097")
         self.assertEqual(
-            {p.card_image_id: p.owned for p in status.printings},
-            {"OP05-097": 4, "OP05-097_p1": 2},
+            {a.card_image_id: a.quantity for a in status.arts},
+            {None: 4, "OP05-097_p1": 2},
         )
 
-
-class StorageTests(unittest.TestCase):
-    def setUp(self):
-        self.conn = make_db()
-        add_card(self.conn, "OP05-097", "OP05-097")
-        self.conn.execute(
-            "INSERT INTO collection (card_image_id, quantity) VALUES ('OP05-097', 7)"
-        )
-
-    def tearDown(self):
-        self.conn.close()
-
-    def place(self, location, qty):
-        cur = self.conn.execute(
-            "INSERT OR IGNORE INTO storage_locations (name) VALUES (?)", (location,)
-        )
-        loc_id = cur.lastrowid or self.conn.execute(
-            "SELECT id FROM storage_locations WHERE name = ?", (location,)
-        ).fetchone()[0]
-        self.conn.execute(
-            "INSERT INTO collection_placements (card_image_id, location_id, quantity) VALUES (?, ?, ?)",
-            ("OP05-097", loc_id, qty),
-        )
-        return loc_id
-
-    def test_copies_split_across_locations(self):
-        self.place("Binder A", 2)
-        self.place("Trade box", 1)
-        placed = self.conn.execute(
-            "SELECT SUM(quantity) FROM collection_placements WHERE card_image_id = 'OP05-097'"
-        ).fetchone()[0]
-        self.assertEqual(placed, 3)
-
-    def test_location_names_are_unique(self):
-        self.place("Binder A", 2)
-        with self.assertRaises(sqlite3.IntegrityError):
-            self.conn.execute("INSERT INTO storage_locations (name) VALUES ('Binder A')")
-
-    def test_one_placement_row_per_card_and_location(self):
-        loc_id = self.place("Binder A", 2)
-        with self.assertRaises(sqlite3.IntegrityError):
-            self.conn.execute(
-                "INSERT INTO collection_placements (card_image_id, location_id, quantity) "
-                "VALUES ('OP05-097', ?, 1)",
-                (loc_id,),
-            )
-
-    def test_deleting_a_location_cascades_placements_but_keeps_ownership(self):
-        loc_id = self.place("Binder A", 2)
-        self.conn.execute("DELETE FROM storage_locations WHERE id = ?", (loc_id,))
-
-        placements = self.conn.execute(
-            "SELECT COUNT(*) FROM collection_placements"
-        ).fetchone()[0]
-        owned = self.conn.execute(
-            "SELECT quantity FROM collection WHERE card_image_id = 'OP05-097'"
-        ).fetchone()[0]
-
-        self.assertEqual(placements, 0)
-        self.assertEqual(owned, 7)  # you still own them — you just haven't said where
-
-    def test_placement_quantity_cannot_be_negative(self):
-        loc_id = self.place("Binder A", 2)
-        with self.assertRaises(sqlite3.IntegrityError):
-            self.conn.execute(
-                "UPDATE collection_placements SET quantity = -1 WHERE location_id = ?",
-                (loc_id,),
-            )
+    def test_an_alt_art_can_satisfy_a_deck(self):
+        """A decklist names a card, not an art, so any printing counts."""
+        add_card(self.conn, "OP05-097_p1", "OP05-097", "Luffy (Parallel)", "p1")
+        add(self.conn, "OP05-097", 1, art="p1")
+        deck = self.sleeve("Red Luffy", 4)
+        move(self.conn, "OP05-097", 1, self.loose, deck, art="p1")
+        self.assertEqual(available(self.conn, "OP05-097"), (5, 5, 0))
 
 
 if __name__ == "__main__":

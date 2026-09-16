@@ -1,9 +1,17 @@
-"""Deck import — the bulk-entry path that bootstraps a collection (D-011).
+"""Decks — a recipe, and for physical decks the copies sleeved into it.
 
-Importing a physical deck creates the deck *and* credits the collection in one
+A deck does two jobs. The **recipe** (`deck_cards`) says what the deck is made
+of, at gameplay level, and exists even for a wishlist deck you own nothing of.
+The **container** holds the copies actually sleeved into it — ordinary `copies`
+rows, the same as a binder's (D-030).
+
+Importing a physical deck writes the recipe *and* places its copies in one
 transaction, so entering the decks you already own populates your inventory for
-free. Wishlist decks (`is_physical = False`) record what you want and never
-touch the collection.
+free (D-011). Wishlist decks are recipe-only and hold no copies.
+
+A physical deck can be incomplete, and that is the mechanism rather than a
+defect: strip a deck to build another and the hole stays visible until it's
+refilled.
 """
 
 from __future__ import annotations
@@ -12,9 +20,10 @@ import sqlite3
 from pathlib import Path
 from typing import NamedTuple
 
-from src.collection import credit
+from src.collection import committed_elsewhere, deposit, empty_container, total_owned
 from src.deck_parser import parse_decklist
-from src.resolve import default_printing, unknown_ids
+from src.resolve import unknown_ids
+from src.storage import deck_container
 
 MAX_COPIES = 4          # warned, never enforced (D-004)
 STANDARD_DECK_SIZE = 50  # excluding the leader
@@ -57,6 +66,18 @@ def _deck_quantities(conn: sqlite3.Connection, deck_id: int) -> dict[str, int]:
         base_card_id: qty
         for base_card_id, qty in conn.execute(
             "SELECT base_card_id, quantity FROM deck_cards WHERE deck_id = ?", (deck_id,)
+        )
+    }
+
+
+def _copies_in_deck(conn: sqlite3.Connection, deck_id: int) -> dict[str, int]:
+    """How many copies of each card are actually sleeved into this deck."""
+    return {
+        base_card_id: qty
+        for base_card_id, qty in conn.execute(
+            "SELECT base_card_id, SUM(quantity) FROM copies WHERE deck_id = ? "
+            "GROUP BY base_card_id",
+            (deck_id,),
         )
     }
 
@@ -116,25 +137,33 @@ def import_decklist(
 
     existing_id = find_deck(conn, clean_name)
     replaced = False
-    previous: dict[str, int] = {}
     if existing_id is not None:
         if on_conflict is None:
             raise DeckNameExists(clean_name, existing_id)
         if on_conflict == "replace":
-            previous = _deck_quantities(conn, existing_id)
             replaced = True
 
     credited = 0
     try:
         if replaced:
-            # ON DELETE CASCADE clears deck_cards with it.
-            conn.execute("DELETE FROM decks WHERE id = ?", (existing_id,))
+            # The deck row survives so its sleeved copies stay attached to it
+            # (D-030). Only the recipe is rewritten.
+            deck_id = existing_id
+            conn.execute(
+                "UPDATE decks SET leader_id = ?, is_physical = ?, "
+                "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (parsed.leader_id, 1 if is_physical else 0, deck_id),
+            )
+            conn.execute("DELETE FROM deck_cards WHERE deck_id = ?", (deck_id,))
+        else:
+            cur = conn.execute(
+                "INSERT INTO decks (name, leader_id, is_physical) VALUES (?, ?, ?)",
+                (clean_name, parsed.leader_id, 1 if is_physical else 0),
+            )
+            deck_id = cur.lastrowid
 
-        cur = conn.execute(
-            "INSERT INTO decks (name, leader_id, is_physical) VALUES (?, ?, ?)",
-            (clean_name, parsed.leader_id, 1 if is_physical else 0),
-        )
-        deck_id = cur.lastrowid
+        container = deck_container(conn, deck_id)
+        already = _copies_in_deck(conn, deck_id)
 
         for base_card_id, qty in entries:
             conn.execute(
@@ -143,21 +172,17 @@ def import_decklist(
             )
 
             if not is_physical:
-                continue  # a wishlist deck never touches the collection
+                continue  # a wishlist deck holds no copies
 
-            # On replace, credit only the increase. Cards dropped from the list
-            # aren't removed from the collection — you still physically own
-            # them, they just became loose again.
-            delta = qty - previous.get(base_card_id, 0)
-            if delta <= 0:
+            # Place only the shortfall. Measuring against the copies already in
+            # the deck rather than against the previous recipe means a re-import
+            # never double-places, and a wishlist deck promoted to physical
+            # places everything it's missing (D-022, D-030).
+            shortfall = qty - already.get(base_card_id, 0)
+            if shortfall <= 0:
                 continue
-
-            printing = default_printing(conn, base_card_id)
-            if printing is None:  # unreachable: unknown ids were filtered above
-                warnings.append(f"{base_card_id}: no printing found, collection not credited")
-                continue
-            credit(conn, printing, delta)
-            credited += delta
+            deposit(conn, base_card_id, shortfall, container)
+            credited += shortfall
 
         conn.commit()
     except Exception:
@@ -209,11 +234,17 @@ class DeckSummary(NamedTuple):
 class DeckCardStatus(NamedTuple):
     base_card_id: str
     name: str
-    needed: int
-    owned: int
+    needed: int            # what the recipe asks for; 0 = sleeved but not in the recipe
+    owned: int             # copies of this card anywhere
+    in_deck: int           # copies actually sleeved into this deck
     available_to_deck: int
-    missing: int
+    missing: int           # can't be built: needed beyond what's available
     is_leader: bool
+
+    @property
+    def unsleeved(self) -> int:
+        """Recipe slots this deck hasn't been filled with yet."""
+        return max(0, self.needed - self.in_deck)
 
 
 class DeckDetail(NamedTuple):
@@ -224,10 +255,21 @@ class DeckDetail(NamedTuple):
     cards: list[DeckCardStatus]
     total_cards: int
     missing_total: int
+    sleeved_total: int
 
     @property
     def is_complete(self) -> bool:
+        """Owning enough to build it — the question a wishlist deck asks."""
         return self.missing_total == 0
+
+    @property
+    def unsleeved_total(self) -> int:
+        """Recipe slots not yet filled with real copies (physical decks)."""
+        return sum(c.unsleeved for c in self.cards)
+
+    @property
+    def is_built(self) -> bool:
+        return self.unsleeved_total == 0
 
 
 def resolve_deck(conn: sqlite3.Connection, ref: str | int) -> int:
@@ -277,36 +319,38 @@ def show_deck(conn: sqlite3.Connection, ref: str | int) -> DeckDetail:
         "SELECT name, leader_id, is_physical FROM decks WHERE id = ?", (deck_id,)
     ).fetchone()
 
-    rows = conn.execute(
-        """
-        SELECT dc.base_card_id,
-               COALESCE((SELECT MIN(c.name) FROM cards c
-                         WHERE c.base_card_id = dc.base_card_id), dc.base_card_id),
-               dc.quantity,
-               COALESCE((SELECT SUM(col.quantity) FROM collection col
-                         JOIN cards c2 ON c2.card_image_id = col.card_image_id
-                         WHERE c2.base_card_id = dc.base_card_id), 0),
-               COALESCE((SELECT SUM(o.quantity) FROM deck_cards o
-                         JOIN decks od ON od.id = o.deck_id
-                         WHERE o.base_card_id = dc.base_card_id
-                           AND od.is_physical = 1
-                           AND od.id != ?), 0)
-        FROM deck_cards dc
-        WHERE dc.deck_id = ?
-        ORDER BY dc.base_card_id
-        """,
-        (deck_id, deck_id),
+    recipe = conn.execute(
+        "SELECT dc.base_card_id, dc.quantity, "
+        "       COALESCE((SELECT MIN(c.name) FROM cards c "
+        "                 WHERE c.base_card_id = dc.base_card_id), dc.base_card_id) "
+        "FROM deck_cards dc WHERE dc.deck_id = ? ORDER BY dc.base_card_id",
+        (deck_id,),
     ).fetchall()
+    sleeved = _copies_in_deck(conn, deck_id)
+
+    # Copies sleeved into the deck that the recipe no longer asks for. Replacing
+    # a decklist never pulls cards out of the sleeves (D-030), so they show up
+    # here with needed = 0 until they're moved.
+    extras = [
+        (base_card_id, 0, conn.execute(
+            "SELECT COALESCE(MIN(name), ?) FROM cards WHERE base_card_id = ?",
+            (base_card_id, base_card_id),
+        ).fetchone()[0])
+        for base_card_id in sleeved
+        if base_card_id not in {r[0] for r in recipe}
+    ]
 
     cards = []
-    for base_card_id, card_name, needed, owned, committed_elsewhere in rows:
-        available_to_deck = owned - committed_elsewhere
+    for base_card_id, needed, card_name in list(recipe) + extras:
+        owned = total_owned(conn, base_card_id)
+        available_to_deck = owned - committed_elsewhere(conn, base_card_id, deck_id)
         cards.append(
             DeckCardStatus(
                 base_card_id=base_card_id,
                 name=card_name,
                 needed=needed,
                 owned=owned,
+                in_deck=sleeved.get(base_card_id, 0),
                 available_to_deck=available_to_deck,
                 missing=max(0, needed - available_to_deck),
                 is_leader=(base_card_id == leader_id),
@@ -324,34 +368,52 @@ def show_deck(conn: sqlite3.Connection, ref: str | int) -> DeckDetail:
         cards=cards,
         total_cards=sum(c.needed for c in cards),
         missing_total=sum(c.missing for c in cards),
+        sleeved_total=sum(c.in_deck for c in cards),
     )
 
 
-def delete_deck(conn: sqlite3.Connection, ref: str | int) -> str:
-    """Delete a deck. `deck_cards` cascades; the collection is untouched.
+class DeckDeletion(NamedTuple):
+    name: str
+    copies_returned: int
 
-    You still own the cards - they simply stop being committed.
+
+def delete_deck(conn: sqlite3.Connection, ref: str | int) -> DeckDeletion:
+    """Delete a deck. Its sleeved copies go back to just-loose; `deck_cards` cascades.
+
+    Unmaking a deck doesn't lose you cards — they return to the loose pile,
+    which is also what makes stripping a deck to build another work (D-030).
     """
     deck_id = resolve_deck(conn, ref)
     name = conn.execute("SELECT name FROM decks WHERE id = ?", (deck_id,)).fetchone()[0]
-    conn.execute("DELETE FROM decks WHERE id = ?", (deck_id,))
-    conn.commit()
-    return name
+    try:
+        returned = empty_container(conn, deck_container(conn, deck_id))
+        conn.execute("DELETE FROM decks WHERE id = ?", (deck_id,))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return DeckDeletion(name, returned)
 
 
 def set_physical(conn: sqlite3.Connection, ref: str | int, physical: bool) -> list[str]:
-    """Toggle whether a deck locks its cards. Returns warnings, never blocks.
+    """Toggle whether a deck holds real copies. Returns warnings, never blocks.
 
-    Flipping a wishlist deck to physical can commit more copies than you own -
-    that's a legitimate state to be in briefly (you're about to buy the cards),
-    so it warns rather than refusing.
+    Turning a deck back into a wishlist **unmakes** it: the sleeved copies
+    return to just-loose. Turning a wishlist deck physical places nothing — you
+    haven't sleeved it yet — so it reports as unbuilt until copies are moved in.
     """
     deck_id = resolve_deck(conn, ref)
-    conn.execute(
-        "UPDATE decks SET is_physical = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        (1 if physical else 0, deck_id),
-    )
-    conn.commit()
+    try:
+        if not physical:
+            empty_container(conn, deck_container(conn, deck_id))
+        conn.execute(
+            "UPDATE decks SET is_physical = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (1 if physical else 0, deck_id),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
     if not physical:
         return []
@@ -362,5 +424,10 @@ def set_physical(conn: sqlite3.Connection, ref: str | int, physical: bool) -> li
             warnings.append(
                 f"{card.base_card_id}: deck needs {card.needed} but only "
                 f"{max(0, card.available_to_deck)} available"
+            )
+        elif card.unsleeved > 0:
+            warnings.append(
+                f"{card.base_card_id}: {card.unsleeved} of {card.needed} not sleeved "
+                f"into this deck yet"
             )
     return warnings

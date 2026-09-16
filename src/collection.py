@@ -1,10 +1,16 @@
-"""Collection commands — what you physically own, at printing level.
+"""Ownership — the set of copies you hold, and where each one is (D-030).
 
-Quantities are per `card_image_id` (D-003). Rows are never deleted: a card you
-traded away stays at quantity 0 (D-005).
+There is no stored total. Every copy sits in exactly one container (a storage
+location or a physical deck) and how many you own is `SUM(quantity)` over those
+rows. Keeping a separate count would be a second number that has to agree.
 
-`foil_quantity` exists on the table but is deliberately not exposed here — it
-stays 0 through v1 (D-018).
+`card_image_id` on a copy names the art. `NULL` means it hasn't been sorted yet
+— an honest "four of these, I haven't looked". Setting the art on some copies
+splits the row; the total never moves.
+
+Every write is an add at the edge, a move between containers, or a remove. A
+move that asks for more than the source holds is an error that writes nothing:
+every card is accounted for, so a negative pile is never the right answer.
 """
 
 from __future__ import annotations
@@ -12,38 +18,47 @@ from __future__ import annotations
 import sqlite3
 from typing import NamedTuple
 
+from src.storage import Container, loose_container
+
 
 class CollectionError(Exception):
     """A requested change was refused. Carries a message fit to print."""
 
 
-class Placement(NamedTuple):
-    location: str
+class Holding(NamedTuple):
+    """Copies of one card, of one art, in one container."""
+    container: str
+    kind: str                     # a location kind, or "deck"
+    card_image_id: str | None     # None = art not sorted yet
+    quantity: int
+
+    @property
+    def art(self) -> str:
+        return self.card_image_id or "unsorted"
+
+
+class ArtTotal(NamedTuple):
+    card_image_id: str | None     # None = art not sorted yet
+    printing_variant: str | None
+    name: str | None
     quantity: int
 
 
-class DeckUse(NamedTuple):
-    deck_name: str
-    quantity: int
-    is_physical: bool
-
-
-class PrintingStatus(NamedTuple):
+class Printing(NamedTuple):
     card_image_id: str
     printing_variant: str | None
+    printing_kind: str | None
     name: str
-    owned: int
-    placed: int
-    placements: list[Placement]
 
 
 class CardStatus(NamedTuple):
     base_card_id: str
-    printings: list[PrintingStatus]
+    name: str
     total_owned: int
-    committed: int
-    available: int
-    decks: list[DeckUse]
+    committed: int                # copies sleeved into physical decks
+    arts: list[ArtTotal]          # what you own, by art; unsorted first
+    holdings: list[Holding]       # what you own, by container
+    printings: list[Printing]     # every printing that exists, owned or not
 
     @property
     def loose(self) -> int:
@@ -51,183 +66,367 @@ class CardStatus(NamedTuple):
         return self.total_owned - self.committed
 
     @property
-    def placed(self) -> int:
-        return sum(p.placed for p in self.printings)
-
-    @property
-    def unplaced(self) -> int:
-        """Loose copies whose storage location hasn't been recorded."""
-        return self.loose - self.placed
+    def unsorted(self) -> int:
+        return sum(a.quantity for a in self.arts if a.card_image_id is None)
 
 
 # --------------------------------------------------------------------------
 # internals
 # --------------------------------------------------------------------------
 
-def _base_card_id(conn: sqlite3.Connection, card_image_id: str) -> str:
+def _require_base_card(conn: sqlite3.Connection, base_card_id: str) -> str:
+    """Confirm the gameplay id exists, and return the card's name."""
     row = conn.execute(
-        "SELECT base_card_id FROM cards WHERE card_image_id = ?", (card_image_id,)
+        "SELECT MIN(name) FROM cards WHERE base_card_id = ?", (base_card_id,)
     ).fetchone()
-    if row is None:
-        raise CollectionError(f"unknown printing {card_image_id!r} - not in the card database")
+    if row is None or row[0] is None:
+        raise CollectionError(f"unknown card {base_card_id!r} - not in the card database")
     return row[0]
 
 
-def _committed(conn: sqlite3.Connection, base_card_id: str) -> int:
-    row = conn.execute(
-        "SELECT COALESCE(SUM(dc.quantity), 0) FROM deck_cards dc "
-        "JOIN decks d ON d.id = dc.deck_id "
-        "WHERE d.is_physical = 1 AND dc.base_card_id = ?",
-        (base_card_id,),
-    ).fetchone()
-    return row[0]
+def resolve_art(conn: sqlite3.Connection, base_card_id: str, art: str | None) -> str | None:
+    """Turn an --art argument into a card_image_id, or None for unsorted.
 
-
-def _owned_total(conn: sqlite3.Connection, base_card_id: str, excluding: str | None = None) -> int:
-    sql = (
-        "SELECT COALESCE(SUM(col.quantity), 0) FROM collection col "
-        "JOIN cards c ON c.card_image_id = col.card_image_id "
-        "WHERE c.base_card_id = ?"
-    )
-    params: list = [base_card_id]
-    if excluding is not None:
-        sql += " AND col.card_image_id != ?"
-        params.append(excluding)
-    return conn.execute(sql, params).fetchone()[0]
-
-
-def _guard(conn: sqlite3.Connection, card_image_id: str, new_quantity: int) -> None:
-    """Refuse changes that would commit more copies than you own.
-
-    Checked at gameplay level, not printing level: a deck asks for `OP05-097`
-    without naming a printing, so any printing you own can satisfy it (D-003).
-    Comparing per-printing would false-positive the moment you own an alt art.
+    Accepts a full printing id ('OP05-097_p1'), a bare variant ('p1'), or the
+    word 'base' for the variant-free printing. Refuses an art belonging to a
+    different card rather than silently recording the wrong printing.
     """
-    if new_quantity < 0:
-        raise CollectionError("quantity cannot be negative")
+    if art is None:
+        return None
+    clean = str(art).strip()
+    if not clean or clean.lower() in ("unsorted", "none"):
+        return None
+    candidates = [base_card_id] if clean.lower() == "base" else [clean, f"{base_card_id}_{clean}"]
 
-    base = _base_card_id(conn, card_image_id)
-    committed = _committed(conn, base)
-    total_before = _owned_total(conn, base)
-    total_after = _owned_total(conn, base, excluding=card_image_id) + new_quantity
+    for candidate in candidates:
+        row = conn.execute(
+            "SELECT card_image_id, base_card_id FROM cards WHERE card_image_id = ?",
+            (candidate,),
+        ).fetchone()
+        if row is None:
+            continue
+        if row[1] != base_card_id:
+            raise CollectionError(
+                f"{row[0]} is a printing of {row[1]}, not of {base_card_id}"
+            )
+        return row[0]
 
-    # Only block changes that make things *worse*. A collection can already be
-    # over-committed — toggling a wishlist deck to physical does it — and in
-    # that state adding copies is the fix, so it must never be refused.
-    if total_after < committed and total_after < total_before:
-        raise CollectionError(
-            f"refused: {base} is in physical decks {committed} time(s) but this would "
-            f"leave you owning {total_after}. Remove it from a deck first, or set "
-            f"that deck to wishlist."
+    known = [p.printing_variant or "base" for p in printings_of(conn, base_card_id)]
+    raise CollectionError(
+        f"{base_card_id} has no printing {clean!r} - known arts: {', '.join(known) or 'none'}"
+    )
+
+
+def printings_of(conn: sqlite3.Connection, base_card_id: str) -> list[Printing]:
+    """Every printing of a gameplay card, base printing first."""
+    return [
+        Printing(*row)
+        for row in conn.execute(
+            "SELECT card_image_id, printing_variant, printing_kind, name FROM cards "
+            "WHERE base_card_id = ? ORDER BY (printing_variant IS NOT NULL), card_image_id",
+            (base_card_id,),
         )
+    ]
 
 
-def _current(conn: sqlite3.Connection, card_image_id: str) -> int:
+def _slot_quantity(
+    conn: sqlite3.Connection, base_card_id: str, art: str | None, container: Container
+) -> int:
     row = conn.execute(
-        "SELECT quantity FROM collection WHERE card_image_id = ?", (card_image_id,)
+        "SELECT quantity FROM copies WHERE base_card_id = ? "
+        "AND card_image_id IS ? AND location_id IS ? AND deck_id IS ?",
+        (base_card_id, art, container.location_id, container.deck_id),
     ).fetchone()
     return row[0] if row else 0
 
 
-def write_quantity(conn: sqlite3.Connection, card_image_id: str, quantity: int) -> int:
-    """Set a quantity **without committing** — callers own the transaction.
+def _describe_holdings(
+    conn: sqlite3.Connection, base_card_id: str, container: Container
+) -> str:
+    rows = conn.execute(
+        "SELECT card_image_id, quantity FROM copies WHERE base_card_id = ? "
+        "AND location_id IS ? AND deck_id IS ? ORDER BY (card_image_id IS NOT NULL), card_image_id",
+        (base_card_id, container.location_id, container.deck_id),
+    ).fetchall()
+    if not rows:
+        return "nothing"
+    return ", ".join(f"{qty} {art or 'unsorted'}" for art, qty in rows)
 
-    Deck import needs several collection writes to land atomically with the deck
-    itself, so the commit can't happen in here.
+
+def _deposit(
+    conn: sqlite3.Connection, base_card_id: str, art: str | None,
+    container: Container, quantity: int,
+) -> None:
+    """Add copies to a slot. No commit — callers own the transaction."""
+    existing = _slot_quantity(conn, base_card_id, art, container)
+    if existing:
+        conn.execute(
+            "UPDATE copies SET quantity = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE base_card_id = ? AND card_image_id IS ? "
+            "AND location_id IS ? AND deck_id IS ?",
+            (existing + quantity, base_card_id, art, container.location_id, container.deck_id),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO copies (base_card_id, card_image_id, location_id, deck_id, quantity) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (base_card_id, art, container.location_id, container.deck_id, quantity),
+        )
+
+
+def _withdraw(
+    conn: sqlite3.Connection, base_card_id: str, art: str | None,
+    container: Container, quantity: int,
+) -> None:
+    """Take copies out of a slot, or refuse. No commit — callers own the transaction.
+
+    Refusing rather than flooring at zero is the point of D-030: if the pile
+    doesn't hold what you're taking, the miscount is upstream and writing a
+    smaller number would hide it.
     """
-    conn.execute(
-        "INSERT INTO collection (card_image_id, quantity) VALUES (?, ?) "
-        "ON CONFLICT(card_image_id) DO UPDATE SET "
-        "quantity = excluded.quantity, updated_at = CURRENT_TIMESTAMP",
-        (card_image_id, quantity),
-    )
+    have = _slot_quantity(conn, base_card_id, art, container)
+    if have < quantity:
+        raise CollectionError(
+            f"{container.name} has {have} {art or 'unsorted'} {base_card_id}, "
+            f"not {quantity} (holds: {_describe_holdings(conn, base_card_id, container)})"
+        )
+    remaining = have - quantity
+    if remaining:
+        conn.execute(
+            "UPDATE copies SET quantity = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE base_card_id = ? AND card_image_id IS ? "
+            "AND location_id IS ? AND deck_id IS ?",
+            (remaining, base_card_id, art, container.location_id, container.deck_id),
+        )
+    else:
+        conn.execute(
+            "DELETE FROM copies WHERE base_card_id = ? AND card_image_id IS ? "
+            "AND location_id IS ? AND deck_id IS ?",
+            (base_card_id, art, container.location_id, container.deck_id),
+        )
+
+
+def _check_quantity(quantity: int) -> int:
+    if quantity <= 0:
+        raise CollectionError("quantity must be a positive number of copies")
     return quantity
 
 
-def credit(conn: sqlite3.Connection, card_image_id: str, delta: int) -> int:
-    """Add `delta` copies without committing. Returns the new quantity."""
-    new_quantity = max(0, _current(conn, card_image_id) + delta)
-    return write_quantity(conn, card_image_id, new_quantity)
+def deposit(
+    conn: sqlite3.Connection,
+    base_card_id: str,
+    quantity: int,
+    container: Container,
+    art: str | None = None,
+) -> None:
+    """Add copies **without committing** — callers own the transaction.
+
+    Deck import needs its copies to land atomically with the deck itself, so
+    the commit can't happen in here.
+    """
+    _check_quantity(quantity)
+    _deposit(conn, base_card_id, resolve_art(conn, base_card_id, art), container, quantity)
 
 
-def _write(conn: sqlite3.Connection, card_image_id: str, quantity: int) -> int:
-    write_quantity(conn, card_image_id, quantity)
-    conn.commit()
-    return quantity
+def empty_container(conn: sqlite3.Connection, container: Container) -> int:
+    """Move everything in a container to just-loose. No commit.
+
+    Used when a location or deck is deleted: you still own the cards, so they
+    fall back to the loose pile rather than vanishing with their container.
+    Returns the number of copies moved.
+    """
+    destination = loose_container(conn)
+    rows = conn.execute(
+        "SELECT base_card_id, card_image_id, quantity FROM copies "
+        "WHERE location_id IS ? AND deck_id IS ?",
+        (container.location_id, container.deck_id),
+    ).fetchall()
+    moved = 0
+    for base_card_id, art, quantity in rows:
+        _withdraw(conn, base_card_id, art, container, quantity)
+        _deposit(conn, base_card_id, art, destination, quantity)
+        moved += quantity
+    return moved
 
 
 # --------------------------------------------------------------------------
 # commands
 # --------------------------------------------------------------------------
 
-def add(conn: sqlite3.Connection, card_image_id: str, quantity: int) -> int:
-    """Add copies. Creates the row if absent. Returns the new quantity."""
-    if quantity < 0:
-        raise CollectionError("use remove() to subtract copies")
-    new_quantity = _current(conn, card_image_id) + quantity
-    _guard(conn, card_image_id, new_quantity)
-    return _write(conn, card_image_id, new_quantity)
+def add(
+    conn: sqlite3.Connection,
+    base_card_id: str,
+    quantity: int,
+    art: str | None = None,
+    to: Container | None = None,
+) -> int:
+    """Record copies you've acquired. Returns the new total owned.
+
+    They land in just-loose unless a container is named, and unsorted unless an
+    art is given — you can say what you own before you've looked at the art.
+    """
+    _check_quantity(quantity)
+    _require_base_card(conn, base_card_id)
+    art_id = resolve_art(conn, base_card_id, art)
+    container = to or loose_container(conn)
+    _deposit(conn, base_card_id, art_id, container, quantity)
+    conn.commit()
+    return total_owned(conn, base_card_id)
 
 
-def set_quantity(conn: sqlite3.Connection, card_image_id: str, quantity: int) -> int:
-    """Set an absolute quantity. Returns the new quantity."""
-    _guard(conn, card_image_id, quantity)
-    return _write(conn, card_image_id, quantity)
+def remove(
+    conn: sqlite3.Connection,
+    base_card_id: str,
+    quantity: int,
+    art: str | None = None,
+    frm: Container | None = None,
+) -> int:
+    """Copies leaving the collection — sold, traded, lost. Returns the new total.
+
+    Taken from just-loose unless a container is named. No history is kept: the
+    owner asked for current state only, so a removed copy is simply gone.
+    """
+    _check_quantity(quantity)
+    _require_base_card(conn, base_card_id)
+    art_id = resolve_art(conn, base_card_id, art)
+    container = frm or loose_container(conn)
+    _withdraw(conn, base_card_id, art_id, container, quantity)
+    conn.commit()
+    return total_owned(conn, base_card_id)
 
 
-def remove(conn: sqlite3.Connection, card_image_id: str, quantity: int) -> int:
-    """Subtract copies, flooring at 0. The row is kept at 0, never deleted (D-005)."""
-    if quantity < 0:
-        raise CollectionError("use add() to add copies")
-    new_quantity = max(0, _current(conn, card_image_id) - quantity)
-    _guard(conn, card_image_id, new_quantity)
-    return _write(conn, card_image_id, new_quantity)
+def move(
+    conn: sqlite3.Connection,
+    base_card_id: str,
+    quantity: int,
+    frm: Container,
+    to: Container,
+    art: str | None = None,
+) -> int:
+    """Move copies between containers. Returns the quantity now at the destination.
+
+    Loaning a card is this: a move into a location of kind 'loan'. The copy is
+    still owned, it's just somewhere else.
+    """
+    _check_quantity(quantity)
+    _require_base_card(conn, base_card_id)
+    if frm == to:
+        raise CollectionError(f"{frm.name} is both the source and the destination")
+    art_id = resolve_art(conn, base_card_id, art)
+    try:
+        _withdraw(conn, base_card_id, art_id, frm, quantity)
+        _deposit(conn, base_card_id, art_id, to, quantity)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return _slot_quantity(conn, base_card_id, art_id, to)
+
+
+def set_art(
+    conn: sqlite3.Connection,
+    base_card_id: str,
+    quantity: int,
+    art: str,
+    container: Container | None = None,
+    frm_art: str | None = None,
+) -> int:
+    """Sort copies: say which printing some of them are. Returns copies still unsorted.
+
+    Splits the slot — the total in the container never changes. Recording art
+    where the copies are is the whole point: you decide the art by looking at
+    the card, and you look at it where it sits.
+    """
+    _check_quantity(quantity)
+    _require_base_card(conn, base_card_id)
+    where = container or loose_container(conn)
+    source_art = resolve_art(conn, base_card_id, frm_art)
+    target_art = resolve_art(conn, base_card_id, art)
+    if target_art is None:
+        raise CollectionError("set_art needs a printing - use 'base' for the plain art")
+    if target_art == source_art:
+        raise CollectionError(f"those copies are already {target_art}")
+    try:
+        _withdraw(conn, base_card_id, source_art, where, quantity)
+        _deposit(conn, base_card_id, target_art, where, quantity)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return _slot_quantity(conn, base_card_id, None, where)
+
+
+# --------------------------------------------------------------------------
+# queries
+# --------------------------------------------------------------------------
+
+def total_owned(conn: sqlite3.Connection, base_card_id: str) -> int:
+    return conn.execute(
+        "SELECT COALESCE(SUM(quantity), 0) FROM copies WHERE base_card_id = ?",
+        (base_card_id,),
+    ).fetchone()[0]
+
+
+def committed(conn: sqlite3.Connection, base_card_id: str) -> int:
+    """Copies sleeved into physical decks — owned, but not free to use elsewhere."""
+    return conn.execute(
+        "SELECT COALESCE(SUM(cp.quantity), 0) FROM copies cp "
+        "JOIN decks d ON d.id = cp.deck_id "
+        "WHERE d.is_physical = 1 AND cp.base_card_id = ?",
+        (base_card_id,),
+    ).fetchone()[0]
+
+
+def committed_elsewhere(conn: sqlite3.Connection, base_card_id: str, deck_id: int) -> int:
+    """Copies in *other* physical decks. A deck never competes with itself."""
+    return conn.execute(
+        "SELECT COALESCE(SUM(cp.quantity), 0) FROM copies cp "
+        "JOIN decks d ON d.id = cp.deck_id "
+        "WHERE d.is_physical = 1 AND d.id != ? AND cp.base_card_id = ?",
+        (deck_id, base_card_id),
+    ).fetchone()[0]
 
 
 def show(conn: sqlite3.Connection, base_card_id: str) -> CardStatus | None:
     """Full picture for one gameplay card. None if the id isn't in `cards`."""
-    printing_rows = conn.execute(
-        "SELECT c.card_image_id, c.printing_variant, c.name, COALESCE(col.quantity, 0) "
-        "FROM cards c LEFT JOIN collection col ON col.card_image_id = c.card_image_id "
-        "WHERE c.base_card_id = ? "
-        "ORDER BY (c.printing_variant IS NOT NULL), c.card_image_id",
-        (base_card_id,),
-    ).fetchall()
-    if not printing_rows:
+    printings = printings_of(conn, base_card_id)
+    if not printings:
         return None
 
-    printings = []
-    for card_image_id, variant, name, owned in printing_rows:
-        placements = [
-            Placement(loc, qty)
-            for loc, qty in conn.execute(
-                "SELECT sl.name, cp.quantity FROM collection_placements cp "
-                "JOIN storage_locations sl ON sl.id = cp.location_id "
-                "WHERE cp.card_image_id = ? AND cp.quantity > 0 ORDER BY sl.name",
-                (card_image_id,),
-            )
-        ]
-        printings.append(
-            PrintingStatus(
-                card_image_id, variant, name, owned,
-                sum(p.quantity for p in placements), placements,
-            )
-        )
-
-    decks = [
-        DeckUse(name, qty, bool(is_physical))
-        for name, qty, is_physical in conn.execute(
-            "SELECT d.name, dc.quantity, d.is_physical FROM deck_cards dc "
-            "JOIN decks d ON d.id = dc.deck_id "
-            "WHERE dc.base_card_id = ? ORDER BY d.is_physical DESC, d.name",
+    arts = [
+        ArtTotal(art, variant, name, quantity)
+        for art, variant, name, quantity in conn.execute(
+            "SELECT cp.card_image_id, c.printing_variant, c.name, SUM(cp.quantity) "
+            "FROM copies cp LEFT JOIN cards c ON c.card_image_id = cp.card_image_id "
+            "WHERE cp.base_card_id = ? "
+            "GROUP BY cp.card_image_id, c.printing_variant, c.name "
+            "ORDER BY (cp.card_image_id IS NOT NULL), cp.card_image_id",
             (base_card_id,),
         )
     ]
 
-    total_owned = sum(p.owned for p in printings)
-    committed = _committed(conn, base_card_id)
+    holdings = [
+        Holding(name, kind, art, quantity)
+        for name, kind, art, quantity in conn.execute(
+            "SELECT COALESCE(sl.name, d.name), CASE WHEN cp.deck_id IS NULL THEN sl.kind "
+            "       ELSE 'deck' END, cp.card_image_id, cp.quantity "
+            "FROM copies cp "
+            "LEFT JOIN storage_locations sl ON sl.id = cp.location_id "
+            "LEFT JOIN decks d ON d.id = cp.deck_id "
+            "WHERE cp.base_card_id = ? "
+            "ORDER BY (cp.deck_id IS NOT NULL), COALESCE(sl.name, d.name), cp.card_image_id",
+            (base_card_id,),
+        )
+    ]
+
     return CardStatus(
-        base_card_id, printings, total_owned, committed, total_owned - committed, decks
+        base_card_id=base_card_id,
+        name=printings[0].name,
+        total_owned=sum(a.quantity for a in arts),
+        committed=committed(conn, base_card_id),
+        arts=arts,
+        holdings=holdings,
+        printings=printings,
     )
 
 
@@ -238,28 +437,45 @@ def list_cards(
     category: str | None = None,
     owned_only: bool = False,
     limit: int | None = None,
+    q: str | None = None,
+    offset: int | None = None,
 ) -> list[tuple]:
-    """Browse printings. Returns (card_image_id, name, category, color, owned)."""
+    """Browse printings.
+
+    Returns (card_image_id, name, category, color, owned, card_owned) where
+    `owned` counts copies recorded as *that* art and `card_owned` counts every
+    copy of the gameplay card, sorted or not. They differ whenever the art
+    hasn't been recorded, which is a normal state, not a gap.
+    """
     sql = [
-        "SELECT c.card_image_id, c.name, c.category, c.color, COALESCE(col.quantity, 0) AS owned",
-        "FROM cards c LEFT JOIN collection col ON col.card_image_id = c.card_image_id",
-        "WHERE 1=1",
+        "SELECT c.card_image_id, c.name, c.category, c.color,",
+        "       COALESCE((SELECT SUM(cp.quantity) FROM copies cp",
+        "                 WHERE cp.card_image_id = c.card_image_id), 0) AS owned,",
+        "       COALESCE((SELECT SUM(cp2.quantity) FROM copies cp2",
+        "                 WHERE cp2.base_card_id = c.base_card_id), 0) AS card_owned",
+        "FROM cards c WHERE 1=1",
     ]
     params: list = []
     if set_code:
-        sql.append("AND (c.set_code = ? OR c.card_image_id LIKE ?)")
-        params += [set_code, f"{set_code}-%"]
+        sql.append("AND (c.game_set = ? OR c.set_code = ? OR c.card_image_id LIKE ?)")
+        params += [set_code, set_code, f"{set_code}-%"]
     if color:
         sql.append("AND c.color LIKE ?")
         params.append(f"%{color}%")
     if category:
         sql.append("AND c.category = ?")
         params.append(category)
+    if q:
+        sql.append("AND c.name LIKE ?")
+        params.append(f"%{q}%")
     if owned_only:
-        sql.append("AND COALESCE(col.quantity, 0) > 0")
+        sql.append("AND card_owned > 0")
     sql.append("ORDER BY c.card_image_id")
     if limit:
         sql.append("LIMIT ?")
         params.append(limit)
+        if offset:
+            sql.append("OFFSET ?")
+            params.append(offset)
 
     return conn.execute(" ".join(sql), params).fetchall()

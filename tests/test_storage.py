@@ -1,4 +1,4 @@
-"""Unit tests for src/storage.py.
+"""Unit tests for src/storage.py — containers and locations (D-025, D-030).
 
 Run:
     python -m pytest tests/test_storage.py -v
@@ -9,18 +9,20 @@ from __future__ import annotations
 import sqlite3
 import unittest
 
-from src.db_setup import create_schema
+from src.collection import add, total_owned
+from src.db_setup import DEFAULT_LOOSE_LOCATION, create_schema
 from src.storage import (
-    LOCATION_KINDS,
     AmbiguousLocation,
+    LOCATION_KINDS,
     StorageError,
     add_location,
     contents,
+    deck_container,
     delete_location,
     list_locations,
-    place,
+    loose_container,
     rename_location,
-    unplace,
+    resolve_container,
 )
 
 
@@ -36,284 +38,215 @@ def make_db() -> sqlite3.Connection:
         "INSERT INTO cards (card_image_id, base_card_id, printing_variant, name, category) "
         "VALUES ('OP05-097_p1', 'OP05-097', 'p1', 'Luffy (Parallel)', 'Character')"
     )
-    conn.execute("INSERT INTO collection (card_image_id, quantity) VALUES ('OP05-097', 7)")
     conn.commit()
     return conn
 
 
-class LocationTests(unittest.TestCase):
+def add_deck(conn, name, is_physical=True):
+    cur = conn.execute(
+        "INSERT INTO decks (name, is_physical) VALUES (?, ?)", (name, 1 if is_physical else 0)
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+class Base(unittest.TestCase):
     def setUp(self):
         self.conn = make_db()
 
     def tearDown(self):
         self.conn.close()
 
-    def test_add_and_list(self):
-        add_location(self.conn, "Binder A", notes="red decks")
-        locations = list_locations(self.conn)
-        self.assertEqual(len(locations), 1)
-        self.assertEqual(locations[0].name, "Binder A")
-        self.assertEqual(locations[0].notes, "red decks")
-        self.assertEqual(locations[0].total_cards, 0)
 
-    def test_names_are_trimmed(self):
-        add_location(self.conn, "  Binder A  ")
-        self.assertEqual(list_locations(self.conn)[0].name, "Binder A")
+class BuiltInLooseTests(Base):
+    def test_created_with_the_schema(self):
+        loose = loose_container(self.conn)
+        self.assertEqual(loose.name, DEFAULT_LOOSE_LOCATION)
+        self.assertEqual(loose.kind, "loose")
+        self.assertFalse(loose.is_deck)
 
-    def test_duplicate_name_refused(self):
-        add_location(self.conn, "Binder A")
-        with self.assertRaises(StorageError) as ctx:
-            add_location(self.conn, "Binder A")
-        self.assertIn("already exists", str(ctx.exception))
+    def test_creating_the_schema_twice_does_not_duplicate_it(self):
+        create_schema(self.conn)
+        count = self.conn.execute(
+            "SELECT COUNT(*) FROM storage_locations WHERE name = ?",
+            (DEFAULT_LOOSE_LOCATION,),
+        ).fetchone()[0]
+        self.assertEqual(count, 1)
 
-    def test_empty_name_refused(self):
+    def test_no_container_named_means_just_loose(self):
+        self.assertEqual(resolve_container(self.conn).name, DEFAULT_LOOSE_LOCATION)
+        self.assertEqual(resolve_container(self.conn, None).name, DEFAULT_LOOSE_LOCATION)
+        self.assertEqual(resolve_container(self.conn, "  ").name, DEFAULT_LOOSE_LOCATION)
+
+    def test_cannot_be_renamed_or_deleted(self):
+        """Every command with no container named falls back to it."""
+        with self.assertRaises(StorageError):
+            rename_location(self.conn, DEFAULT_LOOSE_LOCATION, "mine")
+        with self.assertRaises(StorageError):
+            delete_location(self.conn, DEFAULT_LOOSE_LOCATION)
+
+    def test_other_loose_locations_are_allowed_alongside_it(self):
+        add_location(self.conn, "Floor1", "loose")
+        kinds = {loc.name for loc in list_locations(self.conn, "loose")}
+        self.assertEqual(kinds, {DEFAULT_LOOSE_LOCATION, "Floor1"})
+
+
+class AddLocationTests(Base):
+    def test_every_kind(self):
+        for i, kind in enumerate(LOCATION_KINDS):
+            add_location(self.conn, f"L{i}", kind)
+        self.assertEqual(len(list_locations(self.conn)), len(LOCATION_KINDS) + 1)
+
+    def test_unknown_kind_is_refused(self):
+        with self.assertRaises(StorageError):
+            add_location(self.conn, "X", "shoebox")
+
+    def test_empty_name_is_refused(self):
         with self.assertRaises(StorageError):
             add_location(self.conn, "   ")
 
-    def test_rename(self):
-        add_location(self.conn, "Binder A")
-        rename_location(self.conn, "Binder A", "Binder One")
-        self.assertEqual(list_locations(self.conn)[0].name, "Binder One")
-
-    # -- kinds ------------------------------------------------------------
-
-    def test_kind_defaults_to_storage(self):
-        add_location(self.conn, "OP13 Box")
-        self.assertEqual(list_locations(self.conn)[0].kind, "storage")
-
-    def test_unknown_kind_refused(self):
-        with self.assertRaises(StorageError) as ctx:
-            add_location(self.conn, "Somewhere", "deck")
-        self.assertIn("unknown location kind", str(ctx.exception))
-
-    def test_every_kind_is_accepted(self):
-        for kind in LOCATION_KINDS:
-            add_location(self.conn, f"place-{kind}", kind)
-        self.assertEqual(len(list_locations(self.conn)), len(LOCATION_KINDS))
-
-    def test_same_name_allowed_under_different_kinds(self):
+    def test_names_are_unique_per_kind_not_globally(self):
         add_location(self.conn, "Box 1", "storage")
-        add_location(self.conn, "Box 1", "binder")
-        self.assertEqual(len(list_locations(self.conn)), 2)
+        add_location(self.conn, "Box 1", "binder")     # fine - different kind
+        with self.assertRaises(StorageError):
+            add_location(self.conn, "Box 1", "binder")
 
-    def test_duplicate_name_within_one_kind_refused(self):
-        add_location(self.conn, "Box 1", "storage")
-        with self.assertRaises(StorageError) as ctx:
-            add_location(self.conn, "Box 1", "storage")
-        self.assertIn("already exists", str(ctx.exception))
 
-    def test_ambiguous_bare_name_refuses_rather_than_guessing(self):
+class ResolveContainerTests(Base):
+    def test_by_bare_name(self):
+        add_location(self.conn, "Binder A", "binder")
+        self.assertEqual(resolve_container(self.conn, "Binder A").kind, "binder")
+
+    def test_ambiguous_across_kinds_refuses_and_kind_resolves_it(self):
         add_location(self.conn, "Box 1", "storage")
         add_location(self.conn, "Box 1", "binder")
         with self.assertRaises(AmbiguousLocation) as ctx:
-            place(self.conn, "OP05-097", "Box 1", 2)
+            resolve_container(self.conn, "Box 1")
         self.assertEqual(sorted(ctx.exception.kinds), ["binder", "storage"])
+        self.assertEqual(resolve_container(self.conn, "Box 1", "binder").kind, "binder")
 
-    def test_kind_disambiguates(self):
-        add_location(self.conn, "Box 1", "storage")
-        add_location(self.conn, "Box 1", "binder")
-        place(self.conn, "OP05-097", "Box 1", 2, kind="binder")
-        self.assertEqual(contents(self.conn, "Box 1", kind="binder")[0][2], 2)
-        self.assertEqual(contents(self.conn, "Box 1", kind="storage"), [])
+    def test_a_deck_resolves_as_a_container(self):
+        deck_id = add_deck(self.conn, "Law")
+        container = resolve_container(self.conn, "Law")
+        self.assertTrue(container.is_deck)
+        self.assertEqual(container.deck_id, deck_id)
 
-    def test_list_filters_by_kind(self):
-        add_location(self.conn, "Mewtwo Binder", "binder")
-        add_location(self.conn, "OP13 Box", "storage")
-        add_location(self.conn, "Friend 1", "loan")
-        loans = list_locations(self.conn, "loan")
-        self.assertEqual([loc.name for loc in loans], ["Friend 1"])
+    def test_a_location_and_a_deck_sharing_a_name_is_ambiguous(self):
+        add_location(self.conn, "Law", "binder")
+        add_deck(self.conn, "Law")
+        with self.assertRaises(AmbiguousLocation):
+            resolve_container(self.conn, "Law")
+        self.assertTrue(resolve_container(self.conn, "Law", "deck").is_deck)
+        self.assertFalse(resolve_container(self.conn, "Law", "binder").is_deck)
 
-    def test_list_is_grouped_by_kind(self):
-        add_location(self.conn, "OP13 Box", "storage")
-        add_location(self.conn, "Mewtwo Binder", "binder")
-        add_location(self.conn, "Friend 1", "loan")
-        kinds = [loc.kind for loc in list_locations(self.conn)]
-        self.assertEqual(kinds, sorted(kinds))
-
-    def test_rename_to_existing_name_refused(self):
-        add_location(self.conn, "Binder A")
-        add_location(self.conn, "Binder B")
+    def test_decks_can_be_excluded(self):
+        add_deck(self.conn, "Law")
         with self.assertRaises(StorageError):
-            rename_location(self.conn, "Binder A", "Binder B")
+            resolve_container(self.conn, "Law", allow_deck=False)
 
-    def test_unknown_location_reports_clearly(self):
+    def test_two_decks_with_one_name_asks_for_an_id(self):
+        add_deck(self.conn, "Law")
+        add_deck(self.conn, "Law")
         with self.assertRaises(StorageError) as ctx:
-            rename_location(self.conn, "Nowhere", "Somewhere")
-        self.assertIn("no storage location", str(ctx.exception))
+            resolve_container(self.conn, "Law", "deck")
+        self.assertIn("use an id", str(ctx.exception))
 
-    def test_counts_reflect_placements(self):
-        add_location(self.conn, "Binder A")
-        place(self.conn, "OP05-097", "Binder A", 2)
-        place(self.conn, "OP05-097_p1", "Binder A", 3)
-        summary = list_locations(self.conn)[0]
-        self.assertEqual(summary.distinct_cards, 2)
-        self.assertEqual(summary.total_cards, 5)
-
-
-class PlacementTests(unittest.TestCase):
-    def setUp(self):
-        self.conn = make_db()
-        add_location(self.conn, "Binder A")
-        add_location(self.conn, "Trade box")
-
-    def tearDown(self):
-        self.conn.close()
-
-    def test_place_records_quantity(self):
-        result = place(self.conn, "OP05-097", "Binder A", 2)
-        self.assertEqual(result.quantity, 2)
-        self.assertIsNone(result.warning)
-
-    def test_place_is_absolute_not_additive(self):
-        place(self.conn, "OP05-097", "Binder A", 2)
-        place(self.conn, "OP05-097", "Binder A", 2)
-        self.assertEqual(contents(self.conn, "Binder A")[0][2], 2)
-
-    def test_place_zero_removes_the_row(self):
-        place(self.conn, "OP05-097", "Binder A", 2)
-        place(self.conn, "OP05-097", "Binder A", 0)
-        self.assertEqual(contents(self.conn, "Binder A"), [])
-
-    def test_copies_split_across_locations(self):
-        place(self.conn, "OP05-097", "Binder A", 2)
-        place(self.conn, "OP05-097", "Trade box", 1)
-        self.assertEqual(contents(self.conn, "Binder A")[0][2], 2)
-        self.assertEqual(contents(self.conn, "Trade box")[0][2], 1)
-
-    def test_negative_quantity_refused(self):
+    def test_missing_container(self):
         with self.assertRaises(StorageError):
-            place(self.conn, "OP05-097", "Binder A", -1)
+            resolve_container(self.conn, "Nowhere")
 
-    def test_unknown_card_refused(self):
-        with self.assertRaises(StorageError) as ctx:
-            place(self.conn, "ZZ99-999", "Binder A", 1)
-        self.assertIn("unknown printing", str(ctx.exception))
-
-    def test_unknown_location_refused(self):
+    def test_deck_container_by_id(self):
+        deck_id = add_deck(self.conn, "Law")
+        self.assertEqual(deck_container(self.conn, deck_id).name, "Law")
         with self.assertRaises(StorageError):
-            place(self.conn, "OP05-097", "Nowhere", 1)
-
-    def test_unplace_all(self):
-        place(self.conn, "OP05-097", "Binder A", 3)
-        self.assertEqual(unplace(self.conn, "OP05-097", "Binder A"), 0)
-        self.assertEqual(contents(self.conn, "Binder A"), [])
-
-    def test_unplace_partial(self):
-        place(self.conn, "OP05-097", "Binder A", 3)
-        self.assertEqual(unplace(self.conn, "OP05-097", "Binder A", 1), 2)
-
-    def test_unplace_more_than_present_floors_at_zero(self):
-        place(self.conn, "OP05-097", "Binder A", 2)
-        self.assertEqual(unplace(self.conn, "OP05-097", "Binder A", 10), 0)
-
-    def test_unplace_absent_placement_is_zero(self):
-        self.assertEqual(unplace(self.conn, "OP05-097", "Binder A"), 0)
+            deck_container(self.conn, 999)
 
 
-class OverPlacementWarningTests(unittest.TestCase):
-    """Over-placement warns; it must never block (D-019)."""
+class ListLocationsTests(Base):
+    def test_counts_cards_and_copies(self):
+        add_location(self.conn, "Binder A", "binder")
+        binder = resolve_container(self.conn, "Binder A")
+        add(self.conn, "OP05-097", 3, to=binder)
+        add(self.conn, "OP05-097", 1, art="p1", to=binder)
+        summary = next(l for l in list_locations(self.conn) if l.name == "Binder A")
+        self.assertEqual(summary.distinct_cards, 1)   # one gameplay card
+        self.assertEqual(summary.total_cards, 4)      # four copies
 
-    def setUp(self):
-        self.conn = make_db()
-        add_location(self.conn, "Binder A")
-        add_location(self.conn, "Trade box")
+    def test_empty_location_counts_zero(self):
+        add_location(self.conn, "Empty", "storage")
+        summary = next(l for l in list_locations(self.conn) if l.name == "Empty")
+        self.assertEqual((summary.distinct_cards, summary.total_cards), (0, 0))
 
-    def tearDown(self):
-        self.conn.close()
+    def test_filter_by_kind(self):
+        add_location(self.conn, "Binder A", "binder")
+        self.assertEqual([l.name for l in list_locations(self.conn, "binder")], ["Binder A"])
 
-    def test_placing_more_than_owned_warns_but_saves(self):
-        result = place(self.conn, "OP05-097", "Binder A", 99)
-        self.assertIsNotNone(result.warning)
-        self.assertIn("only 7 owned", result.warning)
-        self.assertEqual(contents(self.conn, "Binder A")[0][2], 99)  # saved anyway
 
-    def test_split_placements_exceeding_owned_warns(self):
-        place(self.conn, "OP05-097", "Binder A", 5)
-        result = place(self.conn, "OP05-097", "Trade box", 5)
-        self.assertIn("10 placed", result.warning)
+class RenameAndDeleteTests(Base):
+    def test_rename(self):
+        add_location(self.conn, "Binder A", "binder")
+        rename_location(self.conn, "Binder A", "Binder B")
+        self.assertEqual([l.name for l in list_locations(self.conn, "binder")], ["Binder B"])
 
-    def test_placing_cards_that_are_sleeved_warns(self):
-        self.conn.execute("INSERT INTO decks (name, is_physical) VALUES ('Red Luffy', 1)")
-        deck_id = self.conn.execute("SELECT id FROM decks").fetchone()[0]
-        self.conn.execute(
-            "INSERT INTO deck_cards (deck_id, base_card_id, quantity) VALUES (?, 'OP05-097', 5)",
-            (deck_id,),
+    def test_rename_onto_an_existing_name_is_refused(self):
+        add_location(self.conn, "A", "binder")
+        add_location(self.conn, "B", "binder")
+        with self.assertRaises(StorageError):
+            rename_location(self.conn, "A", "B")
+
+    def test_delete_returns_copies_to_just_loose_rather_than_destroying_them(self):
+        add_location(self.conn, "Binder A", "binder")
+        binder = resolve_container(self.conn, "Binder A")
+        add(self.conn, "OP05-097", 3, to=binder)
+
+        self.assertEqual(delete_location(self.conn, "Binder A"), 3)
+        self.assertEqual(total_owned(self.conn, "OP05-097"), 3)
+        self.assertEqual(
+            contents(self.conn, DEFAULT_LOOSE_LOCATION),
+            [("OP05-097", None, "Luffy", 3)],
         )
-        self.conn.commit()
 
-        # 7 owned, 5 sleeved → only 2 loose, so placing 4 is impossible
-        result = place(self.conn, "OP05-097", "Binder A", 4)
-        self.assertIsNotNone(result.warning)
-        self.assertIn("only 2 loose", result.warning)
+    def test_delete_an_empty_location(self):
+        add_location(self.conn, "Empty", "storage")
+        self.assertEqual(delete_location(self.conn, "Empty"), 0)
 
-    def test_placing_within_loose_count_is_silent(self):
-        self.conn.execute("INSERT INTO decks (name, is_physical) VALUES ('Red Luffy', 1)")
-        deck_id = self.conn.execute("SELECT id FROM decks").fetchone()[0]
-        self.conn.execute(
-            "INSERT INTO deck_cards (deck_id, base_card_id, quantity) VALUES (?, 'OP05-097', 5)",
-            (deck_id,),
-        )
-        self.conn.commit()
-        self.assertIsNone(place(self.conn, "OP05-097", "Binder A", 2).warning)
-
-    def test_wishlist_decks_do_not_reduce_loose(self):
-        self.conn.execute("INSERT INTO decks (name, is_physical) VALUES ('Someday', 0)")
-        deck_id = self.conn.execute("SELECT id FROM decks").fetchone()[0]
-        self.conn.execute(
-            "INSERT INTO deck_cards (deck_id, base_card_id, quantity) VALUES (?, 'OP05-097', 5)",
-            (deck_id,),
-        )
-        self.conn.commit()
-        self.assertIsNone(place(self.conn, "OP05-097", "Binder A", 7).warning)
-
-
-class DeleteLocationTests(unittest.TestCase):
-    def setUp(self):
-        self.conn = make_db()
-        add_location(self.conn, "Binder A")
-
-    def tearDown(self):
-        self.conn.close()
-
-    def test_delete_cascades_placements_but_keeps_ownership(self):
-        place(self.conn, "OP05-097", "Binder A", 3)
-        removed = delete_location(self.conn, "Binder A")
-
-        self.assertEqual(removed, 1)
-        self.assertEqual(list_locations(self.conn), [])
-        owned = self.conn.execute(
-            "SELECT quantity FROM collection WHERE card_image_id = 'OP05-097'"
-        ).fetchone()[0]
-        self.assertEqual(owned, 7)  # you still own them (D-019)
-
-    def test_delete_unknown_location_refused(self):
+    def test_delete_missing_location(self):
         with self.assertRaises(StorageError):
             delete_location(self.conn, "Nowhere")
 
 
-if __name__ == "__main__":
-    unittest.main()
+class ContentsTests(Base):
+    def test_lists_sorted_and_unsorted_copies(self):
+        add_location(self.conn, "Binder A", "binder")
+        binder = resolve_container(self.conn, "Binder A")
+        add(self.conn, "OP05-097", 2, to=binder)
+        add(self.conn, "OP05-097", 1, art="p1", to=binder)
+        self.assertEqual(
+            contents(self.conn, "Binder A"),
+            [("OP05-097", None, "Luffy", 2),
+             ("OP05-097", "OP05-097_p1", "Luffy (Parallel)", 1)],
+        )
 
+    def test_defaults_to_just_loose(self):
+        add(self.conn, "OP05-097", 2)
+        self.assertEqual(contents(self.conn), [("OP05-097", None, "Luffy", 2)])
 
-class ExtraStorageTests(unittest.TestCase):
-    def setUp(self):
-        self.conn = make_db()
-        add_location(self.conn, "Binder A")
+    def test_a_decks_contents(self):
+        deck = deck_container(self.conn, add_deck(self.conn, "Law"))
+        add(self.conn, "OP05-097", 2, to=deck)
+        self.assertEqual(contents(self.conn, "Law"), [("OP05-097", None, "Luffy", 2)])
 
-    def tearDown(self):
-        self.conn.close()
+    def test_empty_container(self):
+        add_location(self.conn, "Empty", "storage")
+        self.assertEqual(contents(self.conn, "Empty"), [])
 
-    def test_rename_to_an_empty_name_refused(self):
-        with self.assertRaises(StorageError):
-            rename_location(self.conn, "Binder A", "   ")
-
-    def test_contents_respects_a_limit(self):
-        place(self.conn, "OP05-097", "Binder A", 1)
-        place(self.conn, "OP05-097_p1", "Binder A", 1)
-        self.assertEqual(len(contents(self.conn, "Binder A")), 2)
+    def test_limit(self):
+        add_location(self.conn, "Binder A", "binder")
+        binder = resolve_container(self.conn, "Binder A")
+        add(self.conn, "OP05-097", 2, to=binder)
+        add(self.conn, "OP05-097", 1, art="p1", to=binder)
         self.assertEqual(len(contents(self.conn, "Binder A", limit=1)), 1)
 
-    def test_contents_hides_zero_quantity_rows(self):
-        place(self.conn, "OP05-097", "Binder A", 2)
-        place(self.conn, "OP05-097", "Binder A", 0)
-        self.assertEqual(contents(self.conn, "Binder A"), [])
+
+if __name__ == "__main__":
+    unittest.main()

@@ -43,6 +43,8 @@ knowing why it's that way? If not, it doesn't need an entry.
 | [D-027](#d-027--attribute-and-life-are-synced-rotation_block-is-not) | Attribute and life are synced; `rotation_block` is not | 2026-09-15 |
 | [D-028](#d-028--set-and-product-are-different-fields) | **Set and product are different fields** | 2026-09-15 |
 | [D-029](#d-029--the-api-reuses-printing-ids-sync-resolves-them) | **The API reuses printing ids; sync resolves them** | 2026-09-15 |
+| [D-030](#d-030--every-copy-is-somewhere-art-is-recorded-on-the-copy) | **Every copy is somewhere; art is recorded on the copy** | 2026-09-15 |
+| [D-031](#d-031--every-printing-of-a-card-agrees-on-its-gameplay-fields) | **Every printing of a card agrees on its gameplay fields** | 2026-09-15 |
 
 ---
 
@@ -786,3 +788,219 @@ same-id-same-card rule argues that *every* printing should inherit gameplay
 fields from its base printing, not only re-identified ones. That's a broader
 decision for the collection re-keying, where gameplay data moves to
 `base_card_id` anyway.
+
+---
+
+## D-030 — Every copy is somewhere; art is recorded on the copy
+
+**2026-09-15** · *Supersedes [D-019](#d-019--storage-locations-move-into-phase-1) and [D-016](#d-016--deck-import-credits-the-base-printing); reshapes the collection half of [D-003](#d-003--collection-is-printing-level-decks-are-gameplay-level); extends [D-025](#d-025--locations-have-a-kind-decks-are-the-fifth-category) and D-011*
+
+Designed with the owner before a single card was entered, from how the cards
+physically live. Three facts about that drove everything:
+
+1. A decklist names cards, not arts (`4 Monkey D. Luffy OP05-097`). Forcing a
+   printing at entry made D-016 *guess* the plain art and record the guess as
+   fact. The schema had no way to say "four of these, unsorted".
+2. Art is decided by looking at the card, and you look at it where it is — in
+   the binder, in the deck. So that is where it should be recorded: click the
+   copy, set the art.
+3. There is no such thing as a copy that is nowhere. What isn't in a binder,
+   box or deck is in the loose pile. Every existing card is accounted for;
+   that is the point of a tracker.
+
+### The model
+
+**Ownership is the set of copies, and every copy is in exactly one container.**
+
+```
+copies(base_card_id, card_image_id | NULL, location_id | deck_id, quantity)
+```
+
+- `base_card_id` is the gameplay identity — always present.
+- `card_image_id` names the art when known; `NULL` means *unsorted*. Setting
+  the art on some of a row's copies splits the row. The total never changes.
+- The container is a storage location (D-025 kinds: storage, binder, loose,
+  loan) **or a physical deck**. Same row shape, same logic, either way.
+- `quantity > 0`, always. There is no negative pile and no over-placement.
+
+**`just-loose` is a built-in location** of kind `loose`, created with the
+schema, not deletable or renamable. It is where copies land when no container
+is named, and where they are taken from when none is named. The owner can add
+other loose locations ("Floor1"); this one is the default.
+
+**Everything else is derived, never stored** (D-009):
+
+| question | answer |
+|---|---|
+| how many do I own | `SUM(quantity)` over the card's copies |
+| how many of art X | the same sum, filtered to that `card_image_id` |
+| committed | copies whose container is a physical deck |
+| loose | copies in a `loose`-kind location |
+| deck completeness | recipe (`deck_cards`) minus copies placed in that deck, per card |
+
+The `collection` table is **removed**. It was the total; the total is now a
+sum. Keeping both would be two numbers that must agree, which is what this
+entry exists to get rid of.
+
+### Operations
+
+Every write is a move between containers, or an add/remove at the edge:
+
+```
+add     OP05-097 4                      4 unsorted copies into just-loose
+add     OP05-097 2 --art p1 --to "Binder A"
+move    OP05-097 2 --from just-loose --to "Binder A"
+set-art OP05-097 1 --in "Binder A" p1   splits the row; total unchanged
+remove  OP05-097 1                      from just-loose (a sale)
+remove  OP05-097 1 --from "Law deck"
+loan    OP05-097 1 "Marco"              a move to a loan-kind location
+```
+
+**Without `--art`, a move or remove takes unsorted copies only.** If the
+source has fewer unsorted copies than asked, it refuses and says what's there
+(`just-loose has 1 unsorted and 2 p1 - say which with --art`). The D-017 rule:
+ask, never guess. So art is always settled *before* a copy leaves - for a sale
+because you named the row, for a loan because the row moves with its art.
+
+**A move that exceeds the source is an error and writes nothing.** The
+overflow case under D-019 - placed more than owned - warned and wrote. It
+can't happen here; what can happen is "move 3 when there are 2", and that is
+a miscount or a forgotten `add`, not bookkeeping to tolerate. The fix is one
+`add` away and the numbers never lie. Decided explicitly by the owner.
+
+### Decks
+
+The recipe stays exactly where it is: `deck_cards`, gameplay-level, untouched.
+What changes is that the sleeved copies are now modelled instead of assumed:
+
+- **Importing a physical deck places the copies into the deck** as it credits
+  them. D-011's "if it's sleeved, you own it" becomes explicit rows rather
+  than an inference from `is_physical`. They land unsorted; sort them later.
+- **A physical deck can be incomplete.** `deck show` compares recipe against
+  copies in the deck. This is the mechanism, not a defect: strip a deck to
+  build another, and the hole stays visible until you refill it.
+- Re-import with `replace` (D-022) only adds copies for cards the new recipe
+  needs more of. It never removes copies; cards dropped from the recipe stay
+  in the deck's container until moved, and show as *in deck, not in recipe*.
+- Toggling a physical deck to wishlist moves its copies to `just-loose` - the
+  deck is unmade. Toggling wishlist to physical places nothing; the deck
+  shows incomplete until copies are moved in.
+- Deleting a deck moves its copies to `just-loose`. You still own the cards.
+- Wishlist decks are recipe-only. Placing into one is refused.
+- 4-copy warnings (D-004) are unchanged.
+
+### What dies
+
+- **D-016.** Import no longer picks an art. Its whole reason was that the
+  schema demanded one.
+- **D-019.** Placement is no longer optional bookkeeping; it is the ledger.
+  `unplaced` and the over-placement warning go with it.
+- **The `collection` table** and `resolve.default_printing`, which existed
+  to serve D-016.
+- The `collection_printings` table proposed during design - a second
+  breakdown of the same total, free to disagree with the placements.
+
+### What it deliberately doesn't do
+
+- **No history.** Sold, traded and lost copies are removed and forgotten;
+  the owner was asked and doesn't want a ledger. `loan` is not removal - the
+  copy is still owned, in a `loan` location.
+- **No hypothetical decks yet.** "Could I build this from what I own" is the
+  Phase 3 deck builder. It is a count over these rows and needs no schema.
+- **Gameplay-field inheritance for *all* printings is left open.** Extending
+  D-029's base-wins rule from re-identified rows to every variant would fix
+  `OP01-016_p2 Nami (SP)` reading counter 1000 against its base's 2000 — 748
+  variants disagree with their base, 65 of them on counter. It is held back
+  because the base row is not always the trustworthy one: `P-055` is a promo
+  that *is* the base id and reads counter 0 where two set-feed variants read
+  1000, so blanket inheritance would spread that instead of fixing it. A
+  majority vote across a card's printings self-corrects single typos and is the
+  likelier answer, but it is a heuristic and wants deciding on its own.
+
+### Why now
+
+`collection`, `decks` and `storage_locations` were empty. This was a schema
+edit and a `--reset`. Every day after cards go in, it is a migration with the
+owner's real data inside it.
+
+---
+
+## D-031 — Every printing of a card agrees on its gameplay fields
+
+**2026-09-15** · *Completes the bullet D-030 left open; extends [D-029](#d-029--the-api-reuses-printing-ids-sync-resolves-them) from re-identified rows to every printing; refines [D-008](#d-008--counter-is-null-for-leaders-events-and-stages)*
+
+An alt art is the same card. Cost, power, counter, colour, attribute, life and
+effect cannot differ between printings without one of them being wrong. **748
+variants disagreed with their base printing** - 691 on effect text, 74 on
+sub-types, 65 on counter, 19 on power.
+
+The counter disagreements were the ones with teeth, because they change how you
+play. Broken down, they were barely a conflict at all:
+
+| | count | reading |
+|---|---|---|
+| variant empty (`0`/`NULL`), base has a number | 49 | the variant is missing data |
+| base empty, variant has a number | 6 | the *base* is missing data |
+| `NULL` vs `0` | 4 | one fact, two spellings |
+| both a real number, genuinely conflicting | 6 | one of them is a typo |
+
+So the rule is not a heuristic: **the base printing wins, unless the base is
+empty, in which case the first printing with a real value supplies it.**
+
+**A majority vote was tried and rejected.** It looked principled and it is
+wrong: across the 65 it picks the base value 34x, a different value 14x and ties
+17x - and on `OP01-041` Kouzuki Momonosuke (base 1000, three variants 0) the
+majority is 0, which would corrupt a correct value. Counted opinions are not
+evidence when the count is of the same API's mistakes.
+
+**The six genuine conflicts all resolve to base-wins**, checked card by card:
+
+- `OP01-016` Nami - base, `_p1` and `_alternate_art` carry the API's
+  `"This card has been officially errata'd."` marker and read 2000; the SP alone
+  reads 1000 and still has the *pre-errata* wording. A stale row.
+- `ST06-006` Tashigi - the SP reads 1000 and its effect text is corrupt too
+  (`"Characters 2 cost"` where the base says `"-2 cost"`).
+- `OP03-112` Pudding - three printings say 2000, the SP and a reprint say 1000.
+- `P-003` Kid and `OP03-102` Sanji - the odd row reads a counter exactly equal
+  to the card's power. See the counter ceiling below.
+
+**Using the errata marker as a tie-break was considered and dropped.** It is
+sound reasoning and it is already covered: of 91 cards carrying the marker,
+there is **not one** where a variant has it and the base doesn't - the only
+shape in which it could ever overrule base-wins. It would be a rule no data
+exercises. Inheritance propagates the errata'd text from the base to every
+printing anyway, which is the outcome it was reaching for.
+
+It is kept as a **tripwire** instead of a rule: sync counts the cards where a
+variant carries the marker and its base doesn't, and warns. That is precisely
+the shape in which base-wins is backwards, so if the feed ever produces one, it
+says so rather than silently overwriting corrected text with outdated text. The
+count is 0 today.
+
+**A counter above 2000 is reported, never rewritten.** All five instances in the
+feed have `counter` exactly equal to `power` - the power leaked into the field,
+the same defect class as D-013's field shift. Real counters are 1000 (1,971
+cards) or 2000 (556). Inheritance fixes the two that had a healthy sibling
+printing; the remaining three are base rows where every printing agrees and
+every printing is wrong, so sync prints a warning and leaves them. Rewriting on
+a guess would hide the next one.
+
+**`NULL` and `0` stop meaning the same thing in `counter`.** D-008 already uses
+`NULL` for "this category cannot have a counter". The API also sent nothing for
+7 Characters that do have the field and simply have no counter - all of them
+high-power cards. A Character now always gets an integer, `0` meaning "no
+counter", and `NULL` stays reserved for not-applicable. `0` still counts as
+*empty* for inheritance, because the six cases where a base read 0 against
+variants reading 1000 were all the base missing data.
+
+**`src/overrides.py` is the escape hatch** - a hand-maintained
+`{base_card_id: {column: value}}` dict applied after inheritance, keyed on the
+gameplay id so a correction reaches every printing. Same pattern as `SEED_TYPES`
+and `SET_BLOCKS`. It exists for the case inheritance cannot reach: every
+printing agrees and every printing is wrong. It **ships empty**: `OP08-001`
+Chopper reading `life 1` is a known typo, but the correct value has to be read
+off the physical card, and a guessed override would be worse than the typo it
+replaces.
+
+Result on the current feed: 852 fields rewritten across 455 cards, and **zero
+variants left disagreeing with their base**.

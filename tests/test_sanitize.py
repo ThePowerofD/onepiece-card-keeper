@@ -69,9 +69,18 @@ class NormalizeCounterTests(unittest.TestCase):
         self.assertIsNone(normalize_counter("Event", "1000"))
         self.assertIsNone(normalize_counter("Stage", "1000"))
 
-    def test_character_null_value(self):
-        self.assertIsNone(normalize_counter("Character", "NULL"))
-        self.assertIsNone(normalize_counter("Character", "?"))
+    def test_a_character_with_no_counter_is_zero_not_null(self):
+        """D-031: NULL is reserved for categories that can't have one (D-008),
+        so 'no counter' and 'not applicable' stay distinguishable."""
+        self.assertEqual(normalize_counter("Character", "NULL"), 0)
+        self.assertEqual(normalize_counter("Character", "?"), 0)
+        self.assertEqual(normalize_counter("Character", None), 0)
+
+    def test_an_unknown_category_is_left_alone(self):
+        """Only Characters get the 0 default; a category we don't recognise
+        shouldn't have a counter invented for it."""
+        self.assertIsNone(normalize_counter(None, "NULL"))
+        self.assertIsNone(normalize_counter("Nonsense", "NULL"))
 
 
 class NormalizeColorsTests(unittest.TestCase):

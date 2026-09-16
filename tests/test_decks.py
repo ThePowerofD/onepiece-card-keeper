@@ -11,7 +11,8 @@ import unittest
 from unittest import mock
 
 from src.db_setup import create_schema
-from src.collection import add, show
+from src.storage import deck_container, loose_container
+from src.collection import add, move, show, total_owned
 from src.decks import (
     DeckError,
     DeckNameExists,
@@ -74,14 +75,21 @@ def availability(conn, base_card_id):
     reading would subtract the same commitment twice.
     """
     status = show(conn, base_card_id)
-    return (status.total_owned, status.committed, status.available)
+    return (status.total_owned, status.committed, status.loose)
 
 
-def owned(conn, card_image_id):
+def owned(conn, base_card_id):
+    """Copies of one gameplay card, wherever they sit and whatever art (D-030)."""
+    return total_owned(conn, base_card_id)
+
+
+def copies_in(conn, base_card_id, container):
     row = conn.execute(
-        "SELECT quantity FROM collection WHERE card_image_id = ?", (card_image_id,)
+        "SELECT COALESCE(SUM(quantity), 0) FROM copies WHERE base_card_id = ? "
+        "AND location_id IS ? AND deck_id IS ?",
+        (base_card_id, container.location_id, container.deck_id),
     ).fetchone()
-    return row[0] if row else 0
+    return row[0]
 
 
 def deck_rows(conn, deck_id):
@@ -122,15 +130,22 @@ class ImportBasicsTests(unittest.TestCase):
         self.assertEqual(owned(self.conn, "OP05-002"), 4)
         self.assertEqual(owned(self.conn, "OP05-013"), 2)
 
-    def test_credits_the_base_printing_not_the_alt_art(self):
+    def test_imported_copies_are_unsorted_not_a_guessed_art(self):
+        """D-030 kills D-016: a decklist names a card, so the art stays open."""
         import_decklist(self.conn, decklist(), "Red Luffy", is_physical=True)
-        self.assertEqual(owned(self.conn, "OP05-002"), 4)
-        self.assertEqual(owned(self.conn, "OP05-002_p1"), 0)
+        arts = {a.card_image_id for a in show(self.conn, "OP05-002").arts}
+        self.assertEqual(arts, {None})
+
+    def test_imported_copies_are_placed_in_the_deck(self):
+        result = import_decklist(self.conn, decklist(), "Red Luffy", is_physical=True)
+        deck = deck_container(self.conn, result.deck_id)
+        self.assertEqual(copies_in(self.conn, "OP05-002", deck), 4)
+        self.assertEqual(copies_in(self.conn, "OP05-002", loose_container(self.conn)), 0)
 
     def test_wishlist_import_never_touches_the_collection(self):
         result = import_decklist(self.conn, decklist(), "Someday", is_physical=False)
         self.assertEqual(result.collection_credited, 0)
-        total = self.conn.execute("SELECT COUNT(*) FROM collection").fetchone()[0]
+        total = self.conn.execute("SELECT COUNT(*) FROM copies").fetchone()[0]
         self.assertEqual(total, 0)
         self.assertEqual(len(deck_rows(self.conn, result.deck_id)), 14)
 
@@ -246,7 +261,11 @@ class NameConflictTests(unittest.TestCase):
         self.assertEqual(owned(self.conn, "OP05-002"), 6)  # 4 + 2, not 4 + 6
 
     def test_replace_does_not_remove_cards_you_still_own(self):
-        """Dropping a card from a list doesn't mean you sold it — it goes loose."""
+        """Dropping a card from the list doesn't unsleeve it (D-030).
+
+        The copies stay in the deck's container until you physically take them
+        out, and show up as 'in deck, not in the recipe'.
+        """
         counts = {f"OP05-{i:03d}": 4 for i in range(1, 13)}
         counts["OP05-013"] = 2
         del counts["OP05-002"]
@@ -254,8 +273,11 @@ class NameConflictTests(unittest.TestCase):
             self.conn, decklist(counts), "Red Luffy", is_physical=True, on_conflict="replace"
         )
         self.assertEqual(owned(self.conn, "OP05-002"), 4)  # still owned
-        _, committed, available = availability(self.conn, "OP05-002")
-        self.assertEqual((committed, available), (0, 4))  # now free to use
+        _, committed, loose = availability(self.conn, "OP05-002")
+        self.assertEqual((committed, loose), (4, 0))  # still sleeved in the deck
+        card = next(c for c in show_deck(self.conn, "Red Luffy").cards
+                    if c.base_card_id == "OP05-002")
+        self.assertEqual((card.needed, card.in_deck), (0, 4))
 
     def test_new_creates_a_second_deck_and_credits_again(self):
         result = import_decklist(
@@ -282,28 +304,28 @@ class AtomicityTests(unittest.TestCase):
     def test_failure_midway_leaves_no_partial_deck(self):
         calls = {"n": 0}
 
-        def exploding_credit(conn, card_image_id, delta):
+        def exploding_deposit(conn, base_card_id, quantity, container, art=None):
             calls["n"] += 1
             if calls["n"] > 3:
                 raise sqlite3.OperationalError("simulated failure")
-            from src.collection import credit as real_credit
-            return real_credit(conn, card_image_id, delta)
+            from src.collection import deposit as real_deposit
+            return real_deposit(conn, base_card_id, quantity, container, art)
 
-        with mock.patch("src.decks.credit", side_effect=exploding_credit):
+        with mock.patch("src.decks.deposit", side_effect=exploding_deposit):
             with self.assertRaises(sqlite3.OperationalError):
                 import_decklist(self.conn, decklist(), "Red Luffy", is_physical=True)
 
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM decks").fetchone()[0], 0)
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM deck_cards").fetchone()[0], 0)
         total = self.conn.execute(
-            "SELECT COALESCE(SUM(quantity), 0) FROM collection"
+            "SELECT COALESCE(SUM(quantity), 0) FROM copies"
         ).fetchone()[0]
         self.assertEqual(total, 0)
 
     def test_failed_replace_keeps_the_original_deck(self):
         first = import_decklist(self.conn, decklist(), "Red Luffy", is_physical=True)
 
-        with mock.patch("src.decks.credit", side_effect=sqlite3.OperationalError("boom")):
+        with mock.patch("src.decks.deposit", side_effect=sqlite3.OperationalError("boom")):
             with self.assertRaises(sqlite3.OperationalError):
                 counts = {f"OP05-{i:03d}": 4 for i in range(1, 13)}
                 counts["OP05-013"] = 3
@@ -411,7 +433,7 @@ class ManagementTests(unittest.TestCase):
 
     def test_alt_art_counts_toward_completion(self):
         import_decklist(self.conn, decklist(), "Someday", is_physical=False)
-        add(self.conn, "OP05-002_p1", 4)
+        add(self.conn, "OP05-002", 4, art="p1")
         card = next(
             c for c in show_deck(self.conn, "Someday").cards if c.base_card_id == "OP05-002"
         )
@@ -429,16 +451,35 @@ class ManagementTests(unittest.TestCase):
         delete_deck(self.conn, "Red Luffy")
         self.assertEqual(availability(self.conn, "OP05-002"), (4, 0, 4))
 
-    def test_set_physical_locks_cards(self):
+    def test_set_physical_places_nothing_by_itself(self):
+        """D-030: marking a deck physical doesn't sleeve it for you.
+
+        The copies are still in just-loose until you move them in, so the deck
+        reports as unbuilt rather than silently committing cards.
+        """
+        import_decklist(self.conn, decklist(), "Someday", is_physical=False)
+        add(self.conn, "OP05-002", 4)
+        warnings = set_physical(self.conn, "Someday", True)
+        self.assertEqual(availability(self.conn, "OP05-002"), (4, 0, 4))
+        self.assertTrue(any("not sleeved" in w for w in warnings))
+        self.assertFalse(show_deck(self.conn, "Someday").is_built)
+
+    def test_moving_copies_into_a_physical_deck_commits_them(self):
         import_decklist(self.conn, decklist(), "Someday", is_physical=False)
         add(self.conn, "OP05-002", 4)
         set_physical(self.conn, "Someday", True)
-        self.assertEqual(availability(self.conn, "OP05-002")[1], 4)
+        deck = deck_container(self.conn, resolve_deck(self.conn, "Someday"))
+        move(self.conn, "OP05-002", 4, loose_container(self.conn), deck)
+        self.assertEqual(availability(self.conn, "OP05-002"), (4, 4, 0))
 
-    def test_set_physical_off_frees_cards(self):
+    def test_set_physical_off_unmakes_the_deck(self):
+        """The sleeved copies come back to just-loose (D-030)."""
         import_decklist(self.conn, decklist(), "Red Luffy", is_physical=True)
         set_physical(self.conn, "Red Luffy", False)
         self.assertEqual(availability(self.conn, "OP05-002"), (4, 0, 4))
+        self.assertEqual(
+            copies_in(self.conn, "OP05-002", loose_container(self.conn)), 4
+        )
 
     def test_set_physical_warns_when_you_do_not_own_the_cards(self):
         import_decklist(self.conn, decklist(), "Someday", is_physical=False)

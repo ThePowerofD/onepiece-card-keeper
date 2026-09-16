@@ -112,13 +112,16 @@ list can't tell you.
 | `GET /api/locations` | `storage.list_locations` |
 | `POST /api/locations` | `storage.add_location` |
 | `GET /api/locations/{name}` | `storage.contents` |
-| `POST /api/placements` | `storage.place` |
-| `DELETE /api/placements` | `storage.unplace` |
+| `POST /api/copies/move` | `collection.move` |
+| `POST /api/copies/set-art` | `collection.set_art` |
 
-UI: a locations page, plus place/unplace controls on the card detail from M1.
+UI: a locations page, plus move and set-art controls on the card detail from M1.
+Setting the art is the click-the-card-where-it-sits flow (D-030), so it belongs
+on the container view as much as on the card view.
 
-`place > loose` **warns and still succeeds** (D-019). Surface the warning in the
-UI; do not turn it into an error, and do not block the write.
+A move that exceeds the source is an **error** (D-030 superseded D-019's warn).
+Surface the message — it names what the container actually holds — and keep the
+UI state unchanged, because the server wrote nothing.
 
 **Done when:** you can look up a card and see which binder it's in.
 
