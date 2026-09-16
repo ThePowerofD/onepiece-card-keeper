@@ -1,23 +1,30 @@
 # OPTCG Manager
 
-Personal desktop app for managing a One Piece TCG collection and deck building.
+Personal offline app for managing a One Piece TCG collection and deck building.
 Tracks what you physically own, where it is, what's sleeved into which deck, and
 what you're missing to build a deck you want.
 
-Python CLI today. Becomes a Tauri + React desktop app in Phase 3.
+Python CLI today. Becomes a local web app — FastAPI + React in a browser tab —
+in Phase 2. (Tauri was dropped before the UI started; see D-023.)
 
 ---
 
 ## Where the project is right now
 
-**Last updated: 2026-08-11 — Phases 0 and 1 complete.**
+**Last updated: 2026-09-15 — Phases 0 and 1 complete. Phase 2 re-planned.**
 
 The card database is built, and the full collection/deck CLI works: import
 Limitless decklists, track what you own at printing level, record where loose
 cards are stored, and see what's missing for a deck you want to build.
 
-Your own collection is still empty — start by importing the decks you've
-already sleeved (see *Using it* below), which populates the collection for free.
+**Your own collection is still empty** — 4,338 cards synced, zero owned. That is
+the honest state: the backend is finished by tests and has never met a real card.
+Loading it is now the first milestone of Phase 2, ahead of any new code.
+
+Phase 2 was re-cut on 2026-09-15 around one sentence — *I open the app, see my
+real cards with images, know where each one is, and can check a decklist against
+what I own.* The old Phase 2 (CLI-only insights) became Phase 3 and will be built
+as UI instead of terminal tables. See **D-024** for the reasoning.
 
 | | |
 |---|---|
@@ -25,15 +32,15 @@ already sleeved (see *Using it* below), which populates the collection for free.
 | Unique gameplay cards (`base_card_id`) | 2,648 |
 | Sets covered | OP01–OP16, EB01–EB04, ST01–ST30, PRB01–02, promos |
 | Bad rows in logs | none |
-| Tests | 246 passing |
+| Tests | 341 passing |
 
 **Known limitation:** OptcgAPI lags the real game. The game is out to **OP17**;
 the API only has **OP16**. Re-run the sync when it catches up — no code change
 needed.
 
-**Next up:** Phase 2 — deck completion & insights. `deck show` already reports
-owned vs missing per card; Phase 2 adds cross-deck views, "what can I build",
-and richer filtering.
+**Next up:** [PHASE_2.md](PHASE_2.md) M0 — import your sleeved decks with the CLI
+below. No code; it's the step that turns every remaining design guess into a
+fact, and it bootstraps the collection for free.
 
 ---
 
@@ -65,7 +72,7 @@ python -m pytest tests/ --cov=src --cov-report=term-missing   # coverage (99%)
   cards table count:  4338
 ```
 
-...and 246 passing tests. Anything else means something changed upstream —
+...and 341 passing tests. Anything else means something changed upstream —
 `Unknown sub_types` above 0 usually means a new set introduced a card type;
 add it to `SEED_TYPES` in `src/known_types.py` and re-sync.
 
@@ -97,13 +104,26 @@ python -m src.cli collection remove OP05-097 1
 python -m src.cli collection show OP05-097       # all printings, decks, locations
 python -m src.cli collection list --set OP-05 --owned-only
 
-# Storage — where the loose cards physically are
-python -m src.cli location add "Binder A" --notes "red decks"
-python -m src.cli location list
-python -m src.cli location rename "Binder A" "Binder One"
-python -m src.cli location delete "Binder One"   # you still own the cards
-python -m src.cli place OP05-097 "Binder A" 2
-python -m src.cli unplace OP05-097 "Binder A" 1  # omit the number to remove all
+# Storage — where the loose cards physically are.
+# Every location has a --kind: storage | binder | loose | loan
+python -m src.cli location add "OP13 Box" --kind storage
+python -m src.cli location add "Mewtwo Binder" --kind binder --notes "alt arts"
+python -m src.cli location add "Friend 1" --kind loan
+python -m src.cli location list                  # grouped by kind
+python -m src.cli location list --kind loan      # just what's lent out
+python -m src.cli location rename "OP13 Box" "OP13 Storage"
+python -m src.cli location delete "OP13 Storage" # you still own the cards
+python -m src.cli place OP05-097 "Mewtwo Binder" 2
+python -m src.cli unplace OP05-097 "Mewtwo Binder" 1  # omit number to remove all
+```
+
+**Names are unique per kind, not globally** — a box and a binder can both be
+"Box 1". When a bare name is ambiguous the command refuses rather than guessing;
+add `--kind` to say which you meant.
+
+```
+$ place OP05-097 "Box 1" 2
+error: 'Box 1' exists as binder and as storage - say which with --kind
 ```
 
 Every command takes `--db PATH` to work against a different database file.
@@ -116,6 +136,19 @@ A wishlist deck locks nothing and reports what you're missing. Toggle with
 which art is sleeved, so import assumes the plain printing. If you actually
 sleeved an alt art, fix it after: `collection set OP05-097 0` then
 `collection set OP05-097_p1 4`.
+
+### First run, in this order
+
+Order matters — you can't place a card you don't own yet, and you own nothing
+until a deck import credits you.
+
+```bash
+python -m src.cli deck import mydeck.txt --name "Red Luffy" --physical
+python -m src.cli location add "Binder A" --kind binder
+python -m src.cli place OP05-097 "Binder A" 2
+python -m src.cli collection show OP05-097   # now shows the placement
+python -m src.cli deck show "Red Luffy"      # owned vs missing
+```
 
 ---
 
@@ -134,7 +167,7 @@ src/
   storage.py      storage locations and placements
   decks.py        deck import and management
   cli.py          argparse entry point over all of the above
-tests/            246 tests
+tests/            341 tests
 data/             optcg.db and cache/ (both gitignored)
 ```
 
@@ -148,7 +181,7 @@ Five files, each with one job. Nothing is documented in two places.
 |---|---|---|
 | **README.md** | This file — what it is, where it stands, how to run it | Every session |
 | **[DESIGN.md](DESIGN.md)** | What **exists** — model, schema, rules, API | When the system changes |
-| **[PHASE_1.md](PHASE_1.md)** | Phase 1 task list — **complete**, delete when Phase 2 starts | While working the phase |
+| **[PHASE_2.md](PHASE_2.md)** | Phase 2 milestones — the MVP, **current** | While working the phase |
 | **[DECISIONS.md](DECISIONS.md)** | *Why* things are the way they are | Append-only, never edited |
 | **[CLAUDE.md](CLAUDE.md)** | Operating instructions for Claude Code | Rarely |
 

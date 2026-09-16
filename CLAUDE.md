@@ -6,7 +6,7 @@ what the system *is*, read the docs below rather than restating them here.
 ## Read first
 
 1. [README.md](README.md) — current state and how to run it
-2. [PHASE_1.md](PHASE_1.md) — what we're building now
+2. [PHASE_2.md](PHASE_2.md) — what we're building now
 3. [DESIGN.md](DESIGN.md) — schema, data model, sanitization rules, API reference
 4. [DECISIONS.md](DECISIONS.md) — why things are the way they are
 
@@ -35,7 +35,10 @@ python -m pytest tests/test_sanitize.py::ToIntTests
 
 ## Gotchas
 
-- `data/optcg.db` is gitignored and always regenerable — never treat it as precious.
+- `data/optcg.db` is gitignored (it's a data blob, not code). The `cards` table is
+  regenerable from the API; `collection`, `decks`, `storage_locations` and their
+  child tables are the owner's real data and are **not**. Never `--reset` a
+  database with rows in those tables without an explicit go-ahead.
 - The API lags the real game (ends at OP16; the game is at OP17). Not a bug.
 - New card types appear with new sets. When `unknown_type_log` is non-empty after
   a sync, add them to `SEED_TYPES` in `src/known_types.py` and re-sync.

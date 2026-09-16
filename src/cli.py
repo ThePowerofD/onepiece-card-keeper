@@ -201,37 +201,40 @@ def cmd_collection_list(conn: sqlite3.Connection, args) -> int:
 # --------------------------------------------------------------------------
 
 def cmd_location_add(conn: sqlite3.Connection, args) -> int:
-    store.add_location(conn, args.name, args.notes)
-    print(f"created location {args.name!r}")
+    store.add_location(conn, args.name, args.kind, args.notes)
+    print(f"created {args.kind} {args.name!r}")
     return 0
 
 
 def cmd_location_list(conn: sqlite3.Connection, args) -> int:
-    locations = store.list_locations(conn)
+    locations = store.list_locations(conn, args.kind)
     if not locations:
         print("no locations yet - create one with `location add`")
         return 0
-    print(f"{'cards':>6} {'copies':>7}  name")
+    current = None
     for loc in locations:
-        print(f"{loc.distinct_cards:>6} {loc.total_cards:>7}  {loc.name}"
+        if loc.kind != current:
+            current = loc.kind
+            print(f"\n{current.upper()}")
+        print(f"{loc.distinct_cards:>6} cards {loc.total_cards:>7} copies  {loc.name}"
               + (f"   ({loc.notes})" if loc.notes else ""))
     return 0
 
 
 def cmd_location_rename(conn: sqlite3.Connection, args) -> int:
-    store.rename_location(conn, args.old, args.new)
+    store.rename_location(conn, args.old, args.new, args.kind)
     print(f"renamed {args.old!r} to {args.new!r}")
     return 0
 
 
 def cmd_location_delete(conn: sqlite3.Connection, args) -> int:
-    removed = store.delete_location(conn, args.name)
+    removed = store.delete_location(conn, args.name, args.kind)
     print(f"deleted location {args.name!r} ({removed} placement rows). You still own the cards.")
     return 0
 
 
 def cmd_place(conn: sqlite3.Connection, args) -> int:
-    result = store.place(conn, args.card_image_id, args.location, args.quantity)
+    result = store.place(conn, args.card_image_id, args.location, args.quantity, args.kind)
     print(f"{args.card_image_id} in {args.location!r}: {result.quantity}")
     if result.warning:
         warn([result.warning])
@@ -239,7 +242,9 @@ def cmd_place(conn: sqlite3.Connection, args) -> int:
 
 
 def cmd_unplace(conn: sqlite3.Connection, args) -> int:
-    remaining = store.unplace(conn, args.card_image_id, args.location, args.quantity)
+    remaining = store.unplace(
+        conn, args.card_image_id, args.location, args.quantity, args.kind
+    )
     print(f"{args.card_image_id} in {args.location!r}: {remaining}")
     return 0
 
@@ -317,21 +322,29 @@ def build_parser() -> argparse.ArgumentParser:
         dest="action", required=True
     )
 
+    # A bare name can match more than one kind, so every command that resolves
+    # a location takes --kind to disambiguate.
+    kind_help = f"one of: {', '.join(store.LOCATION_KINDS)}"
+
     p = loc.add_parser("add", help="create a storage location")
     p.add_argument("name")
+    p.add_argument("--kind", choices=store.LOCATION_KINDS, default="storage", help=kind_help)
     p.add_argument("--notes")
     p.set_defaults(func=cmd_location_add)
 
-    p = loc.add_parser("list", help="list storage locations")
+    p = loc.add_parser("list", help="list storage locations, grouped by kind")
+    p.add_argument("--kind", choices=store.LOCATION_KINDS, default=None, help=kind_help)
     p.set_defaults(func=cmd_location_list)
 
     p = loc.add_parser("rename", help="rename a storage location")
     p.add_argument("old")
     p.add_argument("new")
+    p.add_argument("--kind", choices=store.LOCATION_KINDS, default=None, help=kind_help)
     p.set_defaults(func=cmd_location_rename)
 
     p = loc.add_parser("delete", help="delete a location (ownership untouched)")
     p.add_argument("name")
+    p.add_argument("--kind", choices=store.LOCATION_KINDS, default=None, help=kind_help)
     p.set_defaults(func=cmd_location_delete)
 
     # ---- placements -----------------------------------------------------
@@ -339,12 +352,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("card_image_id")
     p.add_argument("location")
     p.add_argument("quantity", type=int)
+    p.add_argument("--kind", choices=store.LOCATION_KINDS, default=None, help=kind_help)
     p.set_defaults(func=cmd_place)
 
     p = sub.add_parser("unplace", help="remove copies from a location")
     p.add_argument("card_image_id")
     p.add_argument("location")
     p.add_argument("quantity", type=int, nargs="?", default=None)
+    p.add_argument("--kind", choices=store.LOCATION_KINDS, default=None, help=kind_help)
     p.set_defaults(func=cmd_unplace)
 
     return parser

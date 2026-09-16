@@ -19,6 +19,7 @@ TABLES: list[str] = [
         card_image_id      TEXT PRIMARY KEY,
         base_card_id       TEXT NOT NULL,
         printing_variant   TEXT,
+        printing_kind      TEXT,
         name               TEXT NOT NULL,
         category           TEXT NOT NULL,
         cost               INTEGER,
@@ -26,6 +27,8 @@ TABLES: list[str] = [
         counter            INTEGER,
         color              TEXT,
         card_type          TEXT,
+        attribute          TEXT,
+        life               INTEGER,
         effect             TEXT,
         has_trigger        BOOLEAN NOT NULL DEFAULT 0,
         has_blocker        BOOLEAN NOT NULL DEFAULT 0,
@@ -33,6 +36,8 @@ TABLES: list[str] = [
         has_double_attack  BOOLEAN NOT NULL DEFAULT 0,
         has_banish         BOOLEAN NOT NULL DEFAULT 0,
         set_code           TEXT,
+        game_set           TEXT,
+        rotation_block     INTEGER,
         rarity             TEXT,
         image_url          TEXT,
         last_synced        TIMESTAMP
@@ -82,9 +87,15 @@ TABLES: list[str] = [
     """
     CREATE TABLE IF NOT EXISTS storage_locations (
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
-        name       TEXT NOT NULL UNIQUE,
+        name       TEXT NOT NULL,
+        kind       TEXT NOT NULL DEFAULT 'storage'
+                   CHECK(kind IN ('storage', 'binder', 'loose', 'loan')),
         notes      TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        -- Name is unique per kind, not globally: a box and a binder may both
+        -- reasonably be called 'Box 1'. Decks are the fifth category and live
+        -- in `decks`, not here.
+        UNIQUE(name, kind)
     )
     """,
     """
@@ -139,33 +150,19 @@ INDEXES: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_card_types_type_name ON card_types(type_name)",
     "CREATE INDEX IF NOT EXISTS idx_placements_card ON collection_placements(card_image_id)",
     "CREATE INDEX IF NOT EXISTS idx_placements_location ON collection_placements(location_id)",
+    "CREATE INDEX IF NOT EXISTS idx_locations_kind ON storage_locations(kind)",
 ]
 
-# Availability is computed, never stored (D-009). Committed quantity is
-# gameplay-level while ownership is printing-level (D-003), so this view
-# over-subtracts when several printings of one card are owned — aggregate per
-# base_card_id when answering "can I build this?".
-VIEWS: list[str] = [
-    """
-    CREATE VIEW IF NOT EXISTS available_cards AS
-    SELECT c.card_image_id,
-           c.base_card_id,
-           col.quantity                              AS owned,
-           COALESCE(committed.qty, 0)                AS committed,
-           col.quantity - COALESCE(committed.qty, 0) AS available
-    FROM cards c
-    JOIN collection col ON col.card_image_id = c.card_image_id
-    LEFT JOIN (
-        SELECT dc.base_card_id, SUM(dc.quantity) AS qty
-        FROM deck_cards dc
-        JOIN decks d ON d.id = dc.deck_id
-        WHERE d.is_physical = 1
-        GROUP BY dc.base_card_id
-    ) committed ON committed.base_card_id = c.base_card_id
-    """,
-]
+# Availability is computed, never stored (D-009) - in Python, by
+# `collection.show()` and `decks.show_deck()`. There is no view: D-026 removed
+# `available_cards` because SQL at printing level could not express a
+# gameplay-level commitment without double-subtracting it.
+VIEWS: list[str] = []
 
-VIEW_NAMES = ["available_cards"]
+# Dropped on --reset but never created, so databases predating D-026 lose the
+# stale view instead of keeping a wrong one nothing reads. Delete this once no
+# such database is in use.
+LEGACY_VIEW_NAMES = ["available_cards"]
 
 # Drop order: children before parents, so foreign keys never block a reset.
 TABLE_NAMES = [
@@ -191,7 +188,7 @@ def connect(db_path: Path = DB_PATH) -> sqlite3.Connection:
 
 
 def drop_all(conn: sqlite3.Connection) -> None:
-    for name in VIEW_NAMES:
+    for name in LEGACY_VIEW_NAMES:
         conn.execute(f"DROP VIEW IF EXISTS {name}")
     for name in TABLE_NAMES:
         conn.execute(f"DROP TABLE IF EXISTS {name}")
@@ -237,7 +234,7 @@ def main() -> None:
             "SELECT name FROM sqlite_master WHERE type='view' ORDER BY name"
         )]
         print(f"Tables present: {', '.join(tables)}")
-        print(f"Views present: {', '.join(views)}")
+        print(f"Views present: {', '.join(views) if views else '(none - D-026)'}")
     finally:
         conn.close()
 

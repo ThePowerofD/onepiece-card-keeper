@@ -14,15 +14,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from src.api_client import fetch_all_promos, fetch_all_set_cards, fetch_all_st_cards
+from src.collisions import resolve_collisions
 from src.db_setup import DB_PATH, connect
+from src.rotation import block_for
 from src.sanitize import (
     detect_keywords,
     extract_printing_variant,
     normalize_card_image_id,
+    game_set_from_id,
+    normalize_attributes,
     normalize_colors,
     normalize_counter,
+    normalize_life,
     normalize_null,
     parse_subtypes,
+    printing_kind,
     repair_field_shift,
     strip_printing_suffix,
     to_int,
@@ -41,6 +47,8 @@ FIELD_ALIASES = {
     "card_text":     ["card_text", "effect", "text"],
     "set":           ["set_id", "set", "set_code"],
     "rarity":        ["rarity"],
+    "attribute":     ["attribute"],
+    "life":          ["life"],
     "image_url":     ["card_image", "image_url", "image"],
 }
 
@@ -63,10 +71,22 @@ def sanitize_row(row: dict, known_types: list[str], now: str) -> dict | None:
     if card_image_id is None:
         return None
 
-    base_card_id = strip_printing_suffix(pick(row, "card_id")) or strip_printing_suffix(card_image_id)
+    # A row re-identified by resolve_collisions (D-029) carries a synthesised
+    # id like 'OP01-016_alternate_art' that the suffix rules can't parse, so it
+    # also carries the values they would have produced.
+    base_card_id = row.get("_base_card_id") or (
+        strip_printing_suffix(pick(row, "card_id")) or strip_printing_suffix(card_image_id)
+    )
     category = normalize_null(pick(row, "category"))
 
     keywords = detect_keywords(pick(row, "card_text"))
+    set_code = normalize_null(pick(row, "set"))
+    game_set = game_set_from_id(base_card_id)
+    if "_printing_variant" in row:
+        variant, kind = row["_printing_variant"], row["_printing_kind"]
+    else:
+        variant = extract_printing_variant(card_image_id)
+        kind = printing_kind(variant)
     raw_power, raw_sub_types, repaired = repair_field_shift(
         pick(row, "power"), pick(row, "sub_types")
     )
@@ -75,7 +95,8 @@ def sanitize_row(row: dict, known_types: list[str], now: str) -> dict | None:
     return {
         "card_image_id": card_image_id,
         "base_card_id": base_card_id,
-        "printing_variant": extract_printing_variant(card_image_id),
+        "printing_variant": variant,
+        "printing_kind": kind,
         "name": normalize_null(pick(row, "name")) or "",
         "category": category or "",
         "cost": to_int(pick(row, "cost")),
@@ -83,13 +104,17 @@ def sanitize_row(row: dict, known_types: list[str], now: str) -> dict | None:
         "counter": normalize_counter(category, pick(row, "counter")),
         "color": normalize_colors(pick(row, "color")),
         "card_type": normalize_null(raw_sub_types),
+        "attribute": normalize_attributes(pick(row, "attribute")),
+        "life": normalize_life(category, pick(row, "life")),
         "effect": normalize_null(pick(row, "card_text")),
         "has_trigger": keywords["has_trigger"],
         "has_blocker": keywords["has_blocker"],
         "has_rush": keywords["has_rush"],
         "has_double_attack": keywords["has_double_attack"],
         "has_banish": keywords["has_banish"],
-        "set_code": normalize_null(pick(row, "set")),
+        "set_code": set_code,
+        "game_set": game_set,
+        "rotation_block": block_for(game_set),
         "rarity": normalize_null(pick(row, "rarity")),
         "image_url": normalize_null(pick(row, "image_url")),
         "last_synced": now,
@@ -102,15 +127,15 @@ def sanitize_row(row: dict, known_types: list[str], now: str) -> dict | None:
 
 UPSERT_CARD_SQL = """
 INSERT OR REPLACE INTO cards (
-    card_image_id, base_card_id, printing_variant, name, category, cost, power,
-    counter, color, card_type, effect,
+    card_image_id, base_card_id, printing_variant, printing_kind, name, category, cost, power,
+    counter, color, card_type, attribute, life, effect,
     has_trigger, has_blocker, has_rush, has_double_attack, has_banish,
-    set_code, rarity, image_url, last_synced
+    set_code, game_set, rotation_block, rarity, image_url, last_synced
 ) VALUES (
-    :card_image_id, :base_card_id, :printing_variant, :name, :category, :cost, :power,
-    :counter, :color, :card_type, :effect,
+    :card_image_id, :base_card_id, :printing_variant, :printing_kind, :name, :category, :cost, :power,
+    :counter, :color, :card_type, :attribute, :life, :effect,
     :has_trigger, :has_blocker, :has_rush, :has_double_attack, :has_banish,
-    :set_code, :rarity, :image_url, :last_synced
+    :set_code, :game_set, :rotation_block, :rarity, :image_url, :last_synced
 )
 """
 
@@ -141,13 +166,25 @@ def sync(conn: sqlite3.Connection, use_cache: bool = False) -> dict[str, int]:
     promos = fetch_all_promos(use_cache=use_cache)
     print(f"  ->{len(promos)} rows")
 
-    all_rows = set_cards + st_cards + promos
+    # Tag each row with its feed: the resolver prefers non-promo rows as the
+    # base printing, and the promo feed is where most reused ids come from.
+    all_rows = [
+        {**row, "_source": source}
+        for source, feed in (("set", set_cards), ("st", st_cards), ("promos", promos))
+        for row in feed
+    ]
+    all_rows, collision_stats = resolve_collisions(all_rows)
     stats = {
-        "total": len(all_rows),
+        "total": len(all_rows) + collision_stats["exact_duplicates"],
         "inserted": 0,
         "skipped": 0,
         "unknown_types": 0,
         "repaired": 0,
+        "collisions": collision_stats["collisions"],
+        "exact_duplicates": collision_stats["exact_duplicates"],
+        "re_identified": sum(
+            collision_stats[k] for k in ("by_filename", "by_name", "by_name_and_set", "by_ordinal")
+        ),
     }
 
     cur = conn.cursor()
@@ -193,6 +230,9 @@ def main() -> None:
         print(f"  Skipped (no id):    {stats['skipped']}")
         print(f"  Unknown sub_types:  {stats['unknown_types']}")
         print(f"  Field-shift repairs:{stats['repaired']}")
+        print(f"  Id collisions:      {stats['collisions']} "
+              f"({stats['re_identified']} printings re-identified, "
+              f"{stats['exact_duplicates']} exact duplicates dropped - D-029)")
         count = conn.execute("SELECT COUNT(*) FROM cards").fetchone()[0]
         print(f"  cards table count:  {count}")
     finally:

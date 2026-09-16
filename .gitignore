@@ -36,3 +36,6 @@ Thumbs.db
 .coverage
 .coverage.*
 htmlcov/
+
+# Working notes — kept local for now, not yet part of the repo
+*.excalidraw

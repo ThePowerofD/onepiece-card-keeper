@@ -11,6 +11,8 @@ import unittest
 
 from src.db_setup import create_schema
 from src.storage import (
+    LOCATION_KINDS,
+    AmbiguousLocation,
     StorageError,
     add_location,
     contents,
@@ -47,7 +49,7 @@ class LocationTests(unittest.TestCase):
         self.conn.close()
 
     def test_add_and_list(self):
-        add_location(self.conn, "Binder A", "red decks")
+        add_location(self.conn, "Binder A", notes="red decks")
         locations = list_locations(self.conn)
         self.assertEqual(len(locations), 1)
         self.assertEqual(locations[0].name, "Binder A")
@@ -72,6 +74,61 @@ class LocationTests(unittest.TestCase):
         add_location(self.conn, "Binder A")
         rename_location(self.conn, "Binder A", "Binder One")
         self.assertEqual(list_locations(self.conn)[0].name, "Binder One")
+
+    # -- kinds ------------------------------------------------------------
+
+    def test_kind_defaults_to_storage(self):
+        add_location(self.conn, "OP13 Box")
+        self.assertEqual(list_locations(self.conn)[0].kind, "storage")
+
+    def test_unknown_kind_refused(self):
+        with self.assertRaises(StorageError) as ctx:
+            add_location(self.conn, "Somewhere", "deck")
+        self.assertIn("unknown location kind", str(ctx.exception))
+
+    def test_every_kind_is_accepted(self):
+        for kind in LOCATION_KINDS:
+            add_location(self.conn, f"place-{kind}", kind)
+        self.assertEqual(len(list_locations(self.conn)), len(LOCATION_KINDS))
+
+    def test_same_name_allowed_under_different_kinds(self):
+        add_location(self.conn, "Box 1", "storage")
+        add_location(self.conn, "Box 1", "binder")
+        self.assertEqual(len(list_locations(self.conn)), 2)
+
+    def test_duplicate_name_within_one_kind_refused(self):
+        add_location(self.conn, "Box 1", "storage")
+        with self.assertRaises(StorageError) as ctx:
+            add_location(self.conn, "Box 1", "storage")
+        self.assertIn("already exists", str(ctx.exception))
+
+    def test_ambiguous_bare_name_refuses_rather_than_guessing(self):
+        add_location(self.conn, "Box 1", "storage")
+        add_location(self.conn, "Box 1", "binder")
+        with self.assertRaises(AmbiguousLocation) as ctx:
+            place(self.conn, "OP05-097", "Box 1", 2)
+        self.assertEqual(sorted(ctx.exception.kinds), ["binder", "storage"])
+
+    def test_kind_disambiguates(self):
+        add_location(self.conn, "Box 1", "storage")
+        add_location(self.conn, "Box 1", "binder")
+        place(self.conn, "OP05-097", "Box 1", 2, kind="binder")
+        self.assertEqual(contents(self.conn, "Box 1", kind="binder")[0][2], 2)
+        self.assertEqual(contents(self.conn, "Box 1", kind="storage"), [])
+
+    def test_list_filters_by_kind(self):
+        add_location(self.conn, "Mewtwo Binder", "binder")
+        add_location(self.conn, "OP13 Box", "storage")
+        add_location(self.conn, "Friend 1", "loan")
+        loans = list_locations(self.conn, "loan")
+        self.assertEqual([loc.name for loc in loans], ["Friend 1"])
+
+    def test_list_is_grouped_by_kind(self):
+        add_location(self.conn, "OP13 Box", "storage")
+        add_location(self.conn, "Mewtwo Binder", "binder")
+        add_location(self.conn, "Friend 1", "loan")
+        kinds = [loc.kind for loc in list_locations(self.conn)]
+        self.assertEqual(kinds, sorted(kinds))
 
     def test_rename_to_existing_name_refused(self):
         add_location(self.conn, "Binder A")

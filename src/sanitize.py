@@ -11,6 +11,29 @@ NULL_LIKES = {"NULL", "null", "?", "", "-", "--"}
 
 NO_COUNTER_CATEGORIES = {"Leader", "Event", "Stage"}
 
+# Only Leaders have Life. Verified against all 4,459 API rows: 297/297 Leaders
+# carry one, and no Character, Event or Stage does.
+LIFE_CATEGORIES = {"Leader"}
+
+# A closed set in this game, unlike sub-types which grow with each set. Tokens
+# outside it are dropped - see normalize_attributes.
+KNOWN_ATTRIBUTES = ("Slash", "Strike", "Ranged", "Special", "Wisdom")
+_ATTRIBUTE_BY_FOLD = {a.casefold(): a for a in KNOWN_ATTRIBUTES}
+
+ATTRIBUTE_SPLIT_RE = re.compile(r"[/\s]+")
+
+# What a printing's variant suffix means. Checked against all 4,338 rows: every
+# suffix in the feed starts with one of these letters and nothing else.
+#   p*  parallel / alternate art   (Box Topper, Manga, SP, Gold-Stamped)
+#   r*  reprint                    (premium boosters - PRB-01, PRB-02)
+#   pr* promo                      (regionals, film tie-ins, sealed kits)
+# Order matters: 'pr' must be tested before 'p', or every promo reads parallel.
+PRINTING_KIND_PREFIXES = (("pr", "promo"), ("p", "parallel"), ("r", "reprint"))
+
+BASE_PRINTING_KIND = "base"
+
+SET_PREFIX_RE = re.compile(r"^([A-Za-z]+\d*)-")
+
 KEYWORD_PATTERNS = {
     "has_trigger": re.compile(r"\[Trigger\]", re.IGNORECASE),
     "has_blocker": re.compile(r"\[Blocker\]", re.IGNORECASE),
@@ -70,12 +93,39 @@ def normalize_colors(value):
 
 
 def normalize_attributes(value):
-    """Rule 5: 'Slash / Special' → 'Slash/Special'."""
+    """Rule 5: 'Slash / Special' and 'Slash Special' → 'Slash/Special'.
+
+    The API separates dual attributes inconsistently - most use a space
+    ('Slash Strike'), a few a slash ('Slash / Special') - so both split the
+    same way, mirroring normalize_colors.
+
+    Tokens outside KNOWN_ATTRIBUTES are dropped, which is what clears the
+    three junk values the API actually serves: '?' (handled by NULL_LIKES),
+    'N/A' on two reprint stages, and 'Straw Hat Crew ODYSSEY' on OP09-033 -
+    a trait string sitting in the attribute slot. A row whose every token is
+    unrecognised returns None rather than inventing an attribute.
+    """
     cleaned = normalize_null(value)
     if cleaned is None:
         return None
-    parts = [p.strip() for p in cleaned.split("/") if p.strip()]
-    return "/".join(parts) if parts else None
+    kept = []
+    for part in ATTRIBUTE_SPLIT_RE.split(cleaned):
+        canonical = _ATTRIBUTE_BY_FOLD.get(part.strip().casefold())
+        if canonical and canonical not in kept:
+            kept.append(canonical)
+    return "/".join(kept) if kept else None
+
+
+def normalize_life(category, raw_value):
+    """Rule 7: int for Leaders; NULL for everything else.
+
+    Mirrors normalize_counter. Guarding on category means a shifted row that
+    puts a number in the life slot of a Character cannot invent a life total.
+    """
+    cat = normalize_null(category)
+    if cat not in LIFE_CATEGORIES:
+        return None
+    return to_int(raw_value)
 
 
 def parse_subtypes(raw_string, known_types_list):
@@ -165,7 +215,10 @@ def normalize_card_image_id(value):
     cleaned = FILE_EXT_RE.sub("", str(cleaned))
     m = PRINTING_VARIANT_RE.search(cleaned)
     if m:
-        cleaned = f"{cleaned[:m.start()]}_{m.group(1)}"
+        # Lowercase the variant: one row ships 'OP04-016_P1' where the other
+        # 691 parallels use 'p1'. Folding it keeps one printing from splitting
+        # into two primary keys. Verified collision-free across all 4,338 ids.
+        cleaned = f"{cleaned[:m.start()]}_{m.group(1).lower()}"
     return cleaned
 
 
@@ -196,3 +249,43 @@ def detect_keywords(effect_text):
     if cleaned is None:
         return {k: False for k in KEYWORD_PATTERNS}
     return {key: bool(pat.search(cleaned)) for key, pat in KEYWORD_PATTERNS.items()}
+
+
+def game_set_from_id(base_card_id):
+    """Rule 13: 'OP05-006' → 'OP05' — the set a card belongs to.
+
+    Distinct from the `set_code` the API sends, which names the *product* a
+    printing came in. Both are real and both are kept (D-028): a reprint of an
+    OP05 card inside the PRB-01 booster is `game_set='OP05'`,
+    `set_code='PRB-01'`.
+
+    Derived from `base_card_id` rather than `set_code` because `set_code` can't
+    answer it - the feed has no 'OP-14' at all (those cards sit under
+    'OP14-EB04'), and spells promo sets without the hyphen. `base_card_id` is
+    already canonical for all 4,338 rows: 53 clean prefixes, none unparseable.
+    """
+    cleaned = normalize_null(base_card_id)
+    if cleaned is None:
+        return None
+    m = SET_PREFIX_RE.match(str(cleaned))
+    return m.group(1).upper() if m else None
+
+
+def printing_kind(printing_variant):
+    """Rule 14: 'r1' → 'reprint'; 'p2' → 'parallel'; None → 'base'.
+
+    Makes the reprint/alt-art distinction queryable instead of leaving it
+    encoded in a suffix. D-016 credits the base printing on deck import, and
+    this is what lets a picker show you the other three kinds (D-028).
+
+    An unrecognised suffix returns None rather than guessing a kind - the
+    printing is still perfectly usable, it just isn't classified.
+    """
+    cleaned = normalize_null(printing_variant)
+    if cleaned is None:
+        return BASE_PRINTING_KIND
+    lowered = str(cleaned).strip().lower()
+    for prefix, kind in PRINTING_KIND_PREFIXES:
+        if lowered.startswith(prefix):
+            return kind
+    return None

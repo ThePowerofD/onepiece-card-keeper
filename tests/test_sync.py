@@ -237,7 +237,9 @@ class SyncTests(unittest.TestCase):
     def test_empty_fetch_is_not_an_error(self):
         stats = self.run_sync()
         self.assertEqual(stats, {"total": 0, "inserted": 0, "skipped": 0,
-                                 "unknown_types": 0, "repaired": 0})
+                                 "unknown_types": 0, "repaired": 0,
+                                 "collisions": 0, "exact_duplicates": 0,
+                                 "re_identified": 0})
 
     def test_garbage_rows_do_not_crash_the_sync(self):
         rows = [api_row(), {}, {"card_image_id": "X"}, api_row(card_name=None)]

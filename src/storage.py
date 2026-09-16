@@ -17,9 +17,26 @@ class StorageError(Exception):
     """A requested change was refused. Carries a message fit to print."""
 
 
+class AmbiguousLocation(StorageError):
+    """A bare name matched locations of several kinds; the caller must choose."""
+
+    def __init__(self, name: str, kinds: list[str]):
+        super().__init__(
+            f"{name!r} exists as {' and as '.join(kinds)} - say which with --kind"
+        )
+        self.name = name
+        self.kinds = kinds
+
+
+#: The four storage classes. Decks are the fifth category the UI shows, but they
+#: live in `decks` — they have a leader and a card list, which no binder has.
+LOCATION_KINDS = ("storage", "binder", "loose", "loan")
+
+
 class LocationSummary(NamedTuple):
     id: int
     name: str
+    kind: str
     notes: str | None
     distinct_cards: int
     total_cards: int
@@ -34,13 +51,36 @@ class PlaceResult(NamedTuple):
 # internals
 # --------------------------------------------------------------------------
 
-def _location_id(conn: sqlite3.Connection, name: str) -> int:
-    row = conn.execute(
-        "SELECT id FROM storage_locations WHERE name = ?", (name.strip(),)
-    ).fetchone()
-    if row is None:
-        raise StorageError(f"no storage location named {name!r} - create it with `location add`")
-    return row[0]
+def _location_id(conn: sqlite3.Connection, name: str, kind: str | None = None) -> int:
+    """Resolve a location by name, optionally narrowed to one kind.
+
+    Names are only unique per kind, so a bare name can match more than one
+    location. Rather than guess, that raises — same principle as D-017.
+    """
+    clean = name.strip()
+    if kind is not None:
+        _require_kind(kind)
+        row = conn.execute(
+            "SELECT id FROM storage_locations WHERE name = ? AND kind = ?", (clean, kind)
+        ).fetchone()
+        if row is None:
+            raise StorageError(f"no {kind} named {clean!r} - create it with `location add`")
+        return row[0]
+
+    rows = conn.execute(
+        "SELECT id, kind FROM storage_locations WHERE name = ? ORDER BY kind", (clean,)
+    ).fetchall()
+    if not rows:
+        raise StorageError(f"no storage location named {clean!r} - create it with `location add`")
+    if len(rows) > 1:
+        raise AmbiguousLocation(clean, [k for _, k in rows])
+    return rows[0][0]
+
+
+def _require_kind(kind: str) -> str:
+    if kind not in LOCATION_KINDS:
+        raise StorageError(f"unknown location kind {kind!r} - one of {', '.join(LOCATION_KINDS)}")
+    return kind
 
 
 def _require_card(conn: sqlite3.Connection, card_image_id: str) -> str:
@@ -101,39 +141,53 @@ def _overplacement_warning(conn: sqlite3.Connection, card_image_id: str, base_ca
 # locations
 # --------------------------------------------------------------------------
 
-def add_location(conn: sqlite3.Connection, name: str, notes: str | None = None) -> int:
+def add_location(
+    conn: sqlite3.Connection,
+    name: str,
+    kind: str = "storage",
+    notes: str | None = None,
+) -> int:
     clean = name.strip()
     if not clean:
         raise StorageError("location name cannot be empty")
+    _require_kind(kind)
     try:
         cur = conn.execute(
-            "INSERT INTO storage_locations (name, notes) VALUES (?, ?)", (clean, notes)
+            "INSERT INTO storage_locations (name, kind, notes) VALUES (?, ?, ?)",
+            (clean, kind, notes),
         )
     except sqlite3.IntegrityError:
-        raise StorageError(f"a location named {clean!r} already exists") from None
+        raise StorageError(f"a {kind} named {clean!r} already exists") from None
     conn.commit()
     return cur.lastrowid
 
 
-def list_locations(conn: sqlite3.Connection) -> list[LocationSummary]:
-    rows = conn.execute(
+def list_locations(conn: sqlite3.Connection, kind: str | None = None) -> list[LocationSummary]:
+    sql = [
         # SUM(CASE ...) rather than COUNT(...) FILTER: FILTER needs SQLite 3.30+
         # and this should run anywhere Python does.
-        "SELECT sl.id, sl.name, sl.notes, "
-        "       COALESCE(SUM(CASE WHEN cp.quantity > 0 THEN 1 ELSE 0 END), 0), "
-        "       COALESCE(SUM(cp.quantity), 0) "
-        "FROM storage_locations sl "
-        "LEFT JOIN collection_placements cp ON cp.location_id = sl.id "
-        "GROUP BY sl.id, sl.name, sl.notes ORDER BY sl.name"
-    ).fetchall()
-    return [LocationSummary(*row) for row in rows]
+        "SELECT sl.id, sl.name, sl.kind, sl.notes, ",
+        "       COALESCE(SUM(CASE WHEN cp.quantity > 0 THEN 1 ELSE 0 END), 0), ",
+        "       COALESCE(SUM(cp.quantity), 0) ",
+        "FROM storage_locations sl ",
+        "LEFT JOIN collection_placements cp ON cp.location_id = sl.id ",
+    ]
+    params: list = []
+    if kind is not None:
+        _require_kind(kind)
+        sql.append("WHERE sl.kind = ? ")
+        params.append(kind)
+    sql.append("GROUP BY sl.id, sl.name, sl.kind, sl.notes ORDER BY sl.kind, sl.name")
+    return [LocationSummary(*row) for row in conn.execute("".join(sql), params)]
 
 
-def rename_location(conn: sqlite3.Connection, old_name: str, new_name: str) -> None:
+def rename_location(
+    conn: sqlite3.Connection, old_name: str, new_name: str, kind: str | None = None
+) -> None:
     clean = new_name.strip()
     if not clean:
         raise StorageError("location name cannot be empty")
-    loc_id = _location_id(conn, old_name)
+    loc_id = _location_id(conn, old_name, kind)
     try:
         conn.execute("UPDATE storage_locations SET name = ? WHERE id = ?", (clean, loc_id))
     except sqlite3.IntegrityError:
@@ -141,12 +195,12 @@ def rename_location(conn: sqlite3.Connection, old_name: str, new_name: str) -> N
     conn.commit()
 
 
-def delete_location(conn: sqlite3.Connection, name: str) -> int:
+def delete_location(conn: sqlite3.Connection, name: str, kind: str | None = None) -> int:
     """Delete a location. Placements cascade; ownership is untouched.
 
     Returns how many placement rows went with it.
     """
-    loc_id = _location_id(conn, name)
+    loc_id = _location_id(conn, name, kind)
     count = conn.execute(
         "SELECT COUNT(*) FROM collection_placements WHERE location_id = ?", (loc_id,)
     ).fetchone()[0]
@@ -159,7 +213,13 @@ def delete_location(conn: sqlite3.Connection, name: str) -> int:
 # placements
 # --------------------------------------------------------------------------
 
-def place(conn: sqlite3.Connection, card_image_id: str, location: str, quantity: int) -> PlaceResult:
+def place(
+    conn: sqlite3.Connection,
+    card_image_id: str,
+    location: str,
+    quantity: int,
+    kind: str | None = None,
+) -> PlaceResult:
     """Record that `quantity` copies of a printing sit in `location`.
 
     Absolute, not additive — placing 2 twice leaves 2, so re-running a stocktake
@@ -169,7 +229,7 @@ def place(conn: sqlite3.Connection, card_image_id: str, location: str, quantity:
         raise StorageError("quantity cannot be negative")
 
     base_card_id = _require_card(conn, card_image_id)
-    loc_id = _location_id(conn, location)
+    loc_id = _location_id(conn, location, kind)
 
     if quantity == 0:
         conn.execute(
@@ -188,14 +248,18 @@ def place(conn: sqlite3.Connection, card_image_id: str, location: str, quantity:
 
 
 def unplace(
-    conn: sqlite3.Connection, card_image_id: str, location: str, quantity: int | None = None
+    conn: sqlite3.Connection,
+    card_image_id: str,
+    location: str,
+    quantity: int | None = None,
+    kind: str | None = None,
 ) -> int:
     """Remove copies from a location. `quantity=None` removes all of them.
 
     Returns the quantity remaining at that location.
     """
     _require_card(conn, card_image_id)
-    loc_id = _location_id(conn, location)
+    loc_id = _location_id(conn, location, kind)
 
     row = conn.execute(
         "SELECT quantity FROM collection_placements WHERE card_image_id = ? AND location_id = ?",
@@ -220,9 +284,14 @@ def unplace(
     return remaining
 
 
-def contents(conn: sqlite3.Connection, location: str, limit: int | None = None) -> list[tuple]:
+def contents(
+    conn: sqlite3.Connection,
+    location: str,
+    limit: int | None = None,
+    kind: str | None = None,
+) -> list[tuple]:
     """What's in a location: (card_image_id, name, quantity)."""
-    loc_id = _location_id(conn, location)
+    loc_id = _location_id(conn, location, kind)
     sql = (
         "SELECT cp.card_image_id, c.name, cp.quantity FROM collection_placements cp "
         "JOIN cards c ON c.card_image_id = cp.card_image_id "

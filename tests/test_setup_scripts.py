@@ -15,7 +15,14 @@ from pathlib import Path
 from unittest import mock
 
 from src import db_setup, known_types
-from src.db_setup import TABLE_NAMES, VIEW_NAMES, connect, create_schema, drop_all
+from src.db_setup import (
+    LEGACY_VIEW_NAMES,
+    TABLE_NAMES,
+    VIEWS,
+    connect,
+    create_schema,
+    drop_all,
+)
 from src.known_types import SEED_TYPES, list_known_types, seed_known_types
 
 
@@ -26,13 +33,35 @@ class SchemaCreationTests(unittest.TestCase):
     def tearDown(self):
         self.conn.close()
 
-    def test_creates_every_declared_table_and_view(self):
+    def test_creates_every_declared_table(self):
         create_schema(self.conn)
         names = {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master")}
         for table in TABLE_NAMES:
             self.assertIn(table, names)
-        for view in VIEW_NAMES:
-            self.assertIn(view, names)
+
+    def test_creates_no_views(self):
+        """D-026: availability is Python, not SQL. Nothing should recreate it."""
+        self.assertEqual(VIEWS, [])
+        create_schema(self.conn)
+        views = {
+            r[0] for r in self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'view'"
+            )
+        }
+        self.assertEqual(views, set())
+
+    def test_drop_all_removes_a_legacy_view(self):
+        """A database predating D-026 still has the view; --reset must clear it."""
+        create_schema(self.conn)
+        for name in LEGACY_VIEW_NAMES:
+            self.conn.execute(f"CREATE VIEW {name} AS SELECT 1 AS x")
+        drop_all(self.conn)
+        remaining = {
+            r[0] for r in self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'view'"
+            )
+        }
+        self.assertEqual(remaining, set())
 
     def test_idempotent(self):
         create_schema(self.conn)
@@ -65,7 +94,7 @@ class SchemaCreationTests(unittest.TestCase):
                 "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_%'"
             )
         }
-        self.assertEqual(len(indexes), 13)
+        self.assertEqual(len(indexes), 14)
 
 
 class ConnectTests(unittest.TestCase):
@@ -98,7 +127,7 @@ class DbSetupCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             output = self.run_main("--db", str(Path(tmp) / "x.db"))
         self.assertIn("Tables present:", output)
-        self.assertIn("available_cards", output)
+        self.assertIn("Views present: (none - D-026)", output)
 
     def test_reset_drops_first(self):
         with tempfile.TemporaryDirectory() as tmp:

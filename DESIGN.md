@@ -16,9 +16,10 @@ Describes what's **built** — Phase 0 and Phase 1 are both complete.
 - Import decks from Limitless TCG paste format.
 - Distinguish cards locked in sleeved decks from cards free to use.
 - Show deck completion (owned vs missing) for any decklist, including decks you can't yet build.
-- Shareable as a downloadable app — not hosted, not multi-user.
+- Run locally on one machine — not hosted, not multi-user.
 
-**Non-goals (v1):** condition/grading, price history, hosting, multi-user, Japanese cards.
+**Non-goals (v1):** condition/grading, price history, hosting, multi-user,
+Japanese cards, a distributable binary (D-023).
 
 ---
 
@@ -26,11 +27,21 @@ Describes what's **built** — Phase 0 and Phase 1 are both complete.
 
 | Layer | Choice |
 |---|---|
-| App shell | Tauri |
-| UI | React or Svelte — decided at Phase 3 |
+| Frontend | React + Vite, in a browser tab |
+| HTTP layer | FastAPI — JSON over `localhost`, wraps the modules below |
+| Logic | Python: `collection.py`, `decks.py`, `storage.py`, `resolve.py` |
+| Second frontend | `cli.py` — kept, not replaced (D-024) |
 | Database | SQLite |
-| Sync + CLI | Python |
 | Card data | OptcgAPI (`https://optcgapi.com`, override with `OPTCG_API_BASE`) |
+
+Tauri was dropped before the UI started — see **D-023** for why, and what was
+given up with it.
+
+**The logic modules never present.** No `print()`, no HTTP, no formatting: they
+take a connection and return dataclasses. The CLI and the web layer are both thin
+callers. Anything that would put a string in front of a user belongs in `cli.py`
+or `src/web/`, never in `collection.py` and its neighbours — that property is
+what made D-023 cheap and it's worth keeping.
 
 ---
 
@@ -118,6 +129,7 @@ erDiagram
         TEXT card_image_id PK "OP05-097_p1 — the printing"
         TEXT base_card_id "OP05-097 — gameplay identity"
         TEXT printing_variant "p1, or NULL for base"
+        TEXT printing_kind "base/parallel/reprint/promo"
         TEXT name
         TEXT category "Leader/Character/Event/Stage"
         INTEGER cost "NULL for Leaders"
@@ -125,8 +137,12 @@ erDiagram
         INTEGER counter "NULL for non-Characters"
         TEXT color "Blue/Red"
         TEXT card_type "raw sub_types string"
+        TEXT attribute "Slash/Strike — NULL for Events and Stages"
+        INTEGER life "Leaders only"
         TEXT effect "NULL for vanilla cards"
-        TEXT set_code
+        TEXT set_code "the PRODUCT this printing came in"
+        TEXT game_set "the SET the card belongs to — OP05"
+        INTEGER rotation_block "1-5 — always NULL, see D-027"
         TEXT rarity
         TEXT image_url
     }
@@ -138,7 +154,8 @@ erDiagram
     }
     storage_locations {
         INTEGER id PK
-        TEXT name "UNIQUE - 'Binder A'"
+        TEXT name "'OP13 Box' - UNIQUE per kind, not globally"
+        TEXT kind "storage|binder|loose|loan (D-025)"
         TEXT notes
     }
     collection_placements {
@@ -174,14 +191,35 @@ Plus four standalone tables: `known_types` (the type vocabulary),
 `cards` also carries five `has_*` keyword booleans (`trigger`, `blocker`, `rush`,
 `double_attack`, `banish`) and a `last_synced` timestamp.
 
-**13 indexes:** `cards` on `base_card_id`, `category`, `color`, `set_code` and
+**14 indexes:** `cards` on `base_card_id`, `category`, `color`, `set_code` and
 each keyword boolean; `card_types` on `base_card_id` and `type_name`;
-`collection_placements` on `card_image_id` and `location_id`.
+`collection_placements` on `card_image_id` and `location_id`;
+`storage_locations` on `kind`.
 
-**One view, `available_cards`** — `owned`, `committed` and `available` per
-printing (D-009). It over-subtracts when you own several printings of one card,
-because commitment is gameplay-level and ownership is printing-level (D-003), so
-aggregate per `base_card_id` when asking "can I build this?".
+### Where a card lives: five categories, two tables
+
+```
+Storage  ┐
+Binder   │  storage_locations.kind  →  collection_placements
+Loose    │
+Loan     ┘
+Decks    →  decks / deck_cards
+```
+
+The owner thinks of all five as places a card can be (D-025). Four are storage
+kinds; **decks stay in `decks`** because a deck has a leader and a card list that
+no binder has. `collection.show()` returns both halves together, so a card lookup
+answers "which binder *and* which deck" in one call — the seam doesn't surface.
+
+Because names are unique only *within* a kind, a bare name can be ambiguous.
+Lookups refuse rather than guess, raising `AmbiguousLocation`; pass `kind` to
+resolve it.
+
+**No views.** Availability is computed in Python (D-009) by
+`collection.show()` — `total_owned`, `committed`, `available` per *gameplay*
+card — and by `decks.show_deck()`, which additionally knows that a deck never
+competes with itself. The `available_cards` view was removed in D-026: at
+printing level it repeated one gameplay-level commitment on every printing row.
 
 **Two absent foreign keys are deliberate** — `base_card_id` is non-unique by
 design and SQLite requires a UNIQUE/PK target. See D-006.
@@ -234,18 +272,54 @@ Pure functions in `src/sanitize.py` — no DB access, no side effects, one per r
 | 2 | `to_int` | Safe string→int; null-likes → `None` |
 | 3 | `normalize_counter` | Int for Characters; forced `NULL` otherwise |
 | 4 | `normalize_colors` | `"Blue Red"` → `"Blue/Red"` |
-| 5 | `normalize_attributes` | `"Slash / Special"` → `"Slash/Special"` |
+| 5 | `normalize_attributes` | `"Slash Special"` / `"Slash / Special"` → `"Slash/Special"`; unknown tokens dropped |
 | 6 | `parse_subtypes` | Longest-match against `known_types` → `(matched, leftover)` |
 | 7 | `extract_printing_variant` | `"OP05-097_p1"` → `"p1"`; base printing → `None` |
 | 8 | `detect_keywords` | Substring-matches the five bracketed keywords |
 | 9 | `repair_field_shift` | Fixes upstream rows with power/sub_types misaligned (D-013) |
 | 10 | `normalize_card_image_id` | Strips file extensions, folds `-variant` → `_variant` (D-014) |
 | 11 | `strip_printing_suffix` | `"P-029_r1"` → `"P-029"` — the gameplay identity (D-014) |
+| 12 | `normalize_life` | Int for Leaders; forced `NULL` otherwise |
+| 13 | `game_set_from_id` | `"OP05-006"` → `"OP05"` — the set, from `base_card_id` |
+| 14 | `printing_kind` | `"r1"` → `"reprint"`; `None` → `"base"` |
+
+**Id collisions are resolved before sanitizing** (`src/collisions.py`, pure,
+D-029). The API reuses `card_image_id` for physically different printings —
+118 ids in the current feed. `resolve_collisions` keeps the id on the base row
+(plain image name, matching set, non-promo feed), gives every other row a unique
+id — from its image filename when that carries a real `_p1`/`_r1`, else a slug
+of what its name adds (`OP01-016_alternate_art`) — and copies the **gameplay
+fields from the base row** onto them, because the same id is the same card.
+Exact duplicate rows collapse to one. Re-identified rows carry
+`_base_card_id`/`_printing_variant`/`_printing_kind` so the suffix rules aren't
+asked to parse a synthesised id.
 
 **Sync-level behaviors** (in `sync.py`, not pure functions): rows with no
 `card_image_id` go to `skipped_cards_log`; sub-types that don't fully parse go to
 `unknown_type_log`; every row is stamped `last_synced`; `image_url` is stored
 exactly as returned; vanilla cards are valid so `effect` is never `NOT NULL`.
+
+**Attribute is a closed set** — `Slash`, `Strike`, `Ranged`, `Special`,
+`Wisdom`. Unlike sub-types it doesn't grow per set, so `normalize_attributes`
+validates against it and drops anything else. That is what clears the three junk
+values the API serves: `"?"`, `"N/A"`, and `"Straw Hat Crew ODYSSEY"` — a trait
+string in the attribute slot on `OP09-033`.
+
+**Set and product are two different fields** (D-028). `set_code` is what the
+API sends and names the *product* a printing came in; `game_set` is derived
+from `base_card_id` and names the *set the card belongs to*. A reprint of an
+OP05 card in the PRB-01 booster is `game_set='OP05'`, `set_code='PRB-01'` —
+both true. Filter and compute rotation on `game_set`; `set_code` answers
+"which box did this come out of".
+
+**Printing kind is derived, not sent.** `printing_kind` classifies the variant
+suffix — `base` (2,648), `parallel` (1,150), `reprint` (338), `promo` (319) —
+so the alt-art axis is queryable instead of encoded in a string suffix. `pr` is
+tested before `p`, or every promo would read as a parallel.
+
+**`rotation_block` is never populated by sync.** Block isn't in the API at all;
+it comes from a hand-maintained mapping in `src/rotation.py` that ships empty.
+See D-027.
 
 **Sub-type parsing gotcha:** longest-match matters. `"Neo Navy"` must be matched
 before `"Navy"`, or you get a false `Navy` plus `"Neo"` as leftover.
@@ -288,7 +362,8 @@ OP17. Not a bug in this code.
 ## 8. Working principles
 
 - **Schema first.** Get the schema right before writing application code.
-- **CLI before UI.** Validate logic in Python before building Tauri/React.
+- **Logic before presentation.** The modules hold the rules; the CLI and the web
+  layer are both thin callers that only format. Neither owns behaviour.
 - **Log don't crash.** Bad API rows go to log tables, never exceptions.
 - **Idempotent sync.** Running it twice must not duplicate data.
 - **Pure sanitization.** `sanitize.py` never touches the DB.
@@ -298,17 +373,28 @@ OP17. Not a bug in this code.
 
 ## 9. Roadmap
 
+Re-cut on 2026-09-15 around one sentence (D-024):
+
+> *I open the app, see my real cards with images, know where each one is, and can
+> check a decklist against what I own.*
+
 | Phase | Description | Status |
 |---|---|---|
 | 0 | Data foundation — schema + OptcgAPI sync | ✅ Complete |
 | 1 | Collection + decks (CLI) — import, storage locations | ✅ Complete |
-| 2 | Deck completion & insights (CLI) — owned vs missing | ← current |
-| 3 | Minimal UI (Tauri + React/Svelte) | |
+| 2 | **MVP — the app you actually use** ([PHASE_2.md](PHASE_2.md)) | ← current |
+| 3 | Insights — cross-deck views, what-can-I-build | |
 | 4 | Interactive deck builder | |
-| 5 | Images & polish — local cache, hover previews | |
+| 5 | Polish — local image cache, hover previews | |
 | 6+ | Future ideas (below) | |
 
-**Open:** React vs Svelte, decided at Phase 3 start.
+Phase 2 is five milestones: real data in (no code), card browser, locations,
+decks & completion, fast loose-card entry.
+
+What moved and why: the old Phase 2 was CLI-only insights that the UI would have
+replaced, so it became Phase 3 and will be built as UI. Images moved out of
+Phase 5 into the MVP — `image_url` is already on every row, so showing a card is
+an `<img>` tag; only the *local cache* is still Phase 5 work.
 
 ---
 

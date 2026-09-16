@@ -1,7 +1,8 @@
-"""Schema tests — the availability view and the Phase 1 tables.
+"""Schema tests — availability and the Phase 1 tables.
 
-The view encodes real business rules (D-009, D-010, D-003), so it gets tested
-like code rather than trusted like configuration.
+Availability encodes real business rules (D-009, D-010, D-003), so it gets
+tested like code. It is computed by `collection.show()`, not by SQL: D-026
+removed the `available_cards` view because it could not express them.
 
 Run:
     python -m pytest tests/test_schema.py -v
@@ -12,6 +13,7 @@ from __future__ import annotations
 import sqlite3
 import unittest
 
+from src.collection import show
 from src.db_setup import create_schema
 
 
@@ -42,12 +44,16 @@ def add_deck(conn, name, is_physical, cards):
     return deck_id
 
 
-def available(conn, card_image_id):
-    row = conn.execute(
-        "SELECT owned, committed, available FROM available_cards WHERE card_image_id = ?",
-        (card_image_id,),
-    ).fetchone()
-    return row
+def available(conn, base_card_id):
+    """(owned, committed, available) for one gameplay card.
+
+    Aggregated per base_card_id — the level commitment applies at (D-003).
+    None only when the id isn't a real card at all.
+    """
+    status = show(conn, base_card_id)
+    if status is None:
+        return None
+    return (status.total_owned, status.committed, status.available)
 
 
 class SchemaShapeTests(unittest.TestCase):
@@ -63,9 +69,29 @@ class SchemaShapeTests(unittest.TestCase):
             "cards", "card_types", "known_types", "unknown_type_log",
             "skipped_cards_log", "collection", "decks", "deck_cards",
             "app_settings", "storage_locations", "collection_placements",
-            "available_cards",
         ]:
             self.assertIn(expected, names)
+
+    def test_cards_has_game_set_and_printing_kind(self):
+        """D-028: the set a card belongs to, and what kind of printing it is."""
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(cards)")}
+        for col in ("game_set", "printing_kind"):
+            self.assertIn(col, cols)
+
+    def test_cards_has_attribute_life_and_rotation_block(self):
+        """D-027: attribute and life are synced; rotation_block is not."""
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(cards)")}
+        for col in ("attribute", "life", "rotation_block"):
+            self.assertIn(col, cols)
+
+    def test_rotation_block_is_nullable(self):
+        """It ships empty, so inserting a card without one must work."""
+        add_card(self.conn, "OP05-097", "OP05-097", "Luffy")
+        self.assertIsNone(
+            self.conn.execute(
+                "SELECT rotation_block FROM cards WHERE card_image_id = 'OP05-097'"
+            ).fetchone()[0]
+        )
 
     def test_collection_has_foil_quantity_defaulting_to_zero(self):
         add_card(self.conn, "OP05-097", "OP05-097")
@@ -115,21 +141,30 @@ class AvailabilityViewTests(unittest.TestCase):
         self.assertEqual(available(self.conn, "OP05-097"), (4, 3, 1))
 
     def test_available_goes_negative_when_overcommitted(self):
-        # The view reports the truth; the guard that prevents this lives in the
-        # collection commands (Task 1.4), not in SQL.
+        # Availability reports the truth; the guard that prevents this lives in
+        # the collection commands (Task 1.4).
         add_deck(self.conn, "Greedy", True, [("OP05-097", 6)])
         self.assertEqual(available(self.conn, "OP05-097"), (4, 6, -2))
 
-    def test_cards_not_in_collection_are_absent_from_the_view(self):
+    def test_cards_not_in_collection_report_zero(self):
+        """A real card you own none of is 0/0/0, not missing.
+
+        The old view inner-joined `collection` and dropped such cards entirely,
+        which a card browser would have had to paper over (D-026).
+        """
         add_card(self.conn, "OP05-020", "OP05-020", "Zoro")
-        self.assertIsNone(available(self.conn, "OP05-020"))
+        self.assertEqual(available(self.conn, "OP05-020"), (0, 0, 0))
 
-    def test_commitment_is_gameplay_level_so_printings_over_subtract(self):
-        """Documents the known D-003 caveat rather than pretending it's absent.
+    def test_unknown_ids_are_none(self):
+        self.assertIsNone(available(self.conn, "XX99-999"))
 
-        Both printings of OP05-097 report the same committed figure, because a
-        deck says 'OP05-097' without naming a printing. Summing `available`
-        across printings therefore under-counts — aggregate per base_card_id.
+    def test_commitment_is_gameplay_level_and_counted_once(self):
+        """The case the deleted view got wrong (D-026).
+
+        A deck says 'OP05-097' without naming a printing, so commitment is
+        gameplay-level while ownership is printing-level (D-003). The view
+        repeated the same committed figure on every printing row; `show()`
+        aggregates per base_card_id and subtracts it exactly once.
         """
         add_card(self.conn, "OP05-097_p1", "OP05-097", "Luffy (Parallel)")
         self.conn.execute(
@@ -137,13 +172,15 @@ class AvailabilityViewTests(unittest.TestCase):
         )
         add_deck(self.conn, "Red Luffy", True, [("OP05-097", 3)])
 
-        self.assertEqual(available(self.conn, "OP05-097"), (4, 3, 1))
-        self.assertEqual(available(self.conn, "OP05-097_p1"), (2, 3, -1))
+        # 6 owned across two printings, 3 committed once → 3 genuinely free.
+        self.assertEqual(available(self.conn, "OP05-097"), (6, 3, 3))
 
-        owned = self.conn.execute(
-            "SELECT SUM(owned) FROM available_cards WHERE base_card_id = 'OP05-097'"
-        ).fetchone()[0]
-        self.assertEqual(owned, 6)  # 6 owned, 3 committed → 3 genuinely free
+        # Both printings are reported, and ownership stays printing-level.
+        status = show(self.conn, "OP05-097")
+        self.assertEqual(
+            {p.card_image_id: p.owned for p in status.printings},
+            {"OP05-097": 4, "OP05-097_p1": 2},
+        )
 
 
 class StorageTests(unittest.TestCase):

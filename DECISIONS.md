@@ -36,6 +36,13 @@ knowing why it's that way? If not, it doesn't need an entry.
 | [D-020](#d-020--six-doc-files-one-job-each) | Six doc files, one job each | 2026-08-11 |
 | [D-021](#d-021--the-leader-is-stored-twice-on-purpose) | The leader is stored twice, on purpose | 2026-08-11 |
 | [D-022](#d-022--replacing-a-deck-credits-only-increases) | Replacing a deck credits only increases | 2026-08-11 |
+| [D-023](#d-023--drop-tauri-the-app-is-a-local-web-app) | **Drop Tauri — the app is a local web app** | 2026-09-15 |
+| [D-024](#d-024--ui-before-cli-insights-and-the-cli-stays) | UI before CLI insights; the CLI stays | 2026-09-15 |
+| [D-025](#d-025--locations-have-a-kind-decks-are-the-fifth-category) | **Locations have a `kind`; decks are the fifth category** | 2026-09-15 |
+| [D-026](#d-026--delete-the-available_cards-view) | Delete the `available_cards` view | 2026-09-15 |
+| [D-027](#d-027--attribute-and-life-are-synced-rotation_block-is-not) | Attribute and life are synced; `rotation_block` is not | 2026-09-15 |
+| [D-028](#d-028--set-and-product-are-different-fields) | **Set and product are different fields** | 2026-09-15 |
+| [D-029](#d-029--the-api-reuses-printing-ids-sync-resolves-them) | **The API reuses printing ids; sync resolves them** | 2026-09-15 |
 
 ---
 
@@ -417,3 +424,365 @@ you'd reassigned one by hand (D-016).
 
 Consequence: replacing a deck can never lose you cards, and re-importing an
 unchanged list is a no-op on the collection.
+
+---
+
+## D-023 — Drop Tauri; the app is a local web app
+
+**2026-09-15** · *Supersedes the Tauri half of [D-001](#d-001--sqlite--python--tauri)*
+
+D-001 chose Tauri and left "a Python↔Rust boundary to design at Phase 3" as an
+accepted cost. Reviewed before starting the UI, that boundary turned out to have
+no cheap resolution:
+
+- **PyInstaller sidecar** — keeps every line of Python, but produces a 40 MB+
+  bundle and real Windows packaging pain. That erases the "10 MB instead of
+  100 MB" argument that picked Tauri over Electron in the first place.
+- **Rewrite the data layer in Rust** — discards ~2,000 lines of tested Python
+  and adds a new language to a project that doesn't otherwise need one.
+
+So: **FastAPI serving the existing Python modules, React + Vite in the browser.**
+Run locally, opened in a browser tab.
+
+What made this cheap to choose is that `src/` was already written as a library —
+`collection.py`, `decks.py`, `storage.py` and `resolve.py` contain no `print()`
+at all. Every function takes a connection and returns a dataclass, with `cli.py`
+as the only presentation layer. A web layer calls the same functions the CLI
+calls.
+
+The cost is real and accepted: **no desktop icon and no distributable binary.**
+DESIGN.md §1 listed "shareable as a downloadable app" as a goal; that goal is
+dropped. This is a single-user personal tool, and a localhost tab is the form
+that costs the least to reach and the least to maintain.
+
+**Don't reintroduce Tauri to recover "shareable."** If distribution ever matters
+again, the FastAPI layer is what a Tauri shell would wrap anyway — nothing built
+under this decision is wasted.
+
+---
+
+## D-024 — UI before CLI insights; the CLI stays
+
+**2026-09-15** · *Replaces the original Phase 2 scope*
+
+Phase 1 finished with 246 passing tests and **zero rows** in `collection`,
+`decks` and `storage_locations`. The app was complete by test coverage and
+unused by its only user.
+
+The original Phase 2 was "deck completion & insights (CLI)" — cross-deck views,
+what-can-I-build, richer filtering — with Phase 3 then replacing the CLI with a
+UI. That ordering builds presentation code twice: the *queries* survive into the
+UI, the CLI tables don't. Phase 5's image cache was similarly misplaced, since
+`image_url` is already on every row and an `<img>` tag is most of what a card
+app needs to feel like one.
+
+So the phases are re-cut around a single sentence:
+
+> *I open the app, see my real cards with images, know where each one is, and can
+> check a decklist against what I own.*
+
+Anything not serving that moves after it. The old Phase 2 features return later
+as UI features — chosen from experience with a tool in daily use, rather than
+guessed at now.
+
+**The CLI is not being replaced.** The earlier plan said Phase 3 would retire it.
+It stays: it is how bulk deck import happens (D-011), it is the fastest path for
+one-off corrections, and it costs nothing to keep now that both it and the web
+layer are thin callers of the same modules.
+
+**Real data comes first.** Loading the actual collection is the first milestone,
+ahead of any new code, because every load-bearing decision — decks-first entry
+(D-011), import credits the base printing (D-016), placements as optional
+bookkeeping (D-019) — is still an untested guess until real cards go in, and
+reversing one is free now and a migration later.
+
+---
+
+## D-025 — Locations have a `kind`; decks are the fifth category
+
+**2026-09-15** · *Extends [D-019](#d-019--storage-locations-move-into-phase-1)*
+
+Asked where his cards physically live, the owner described five classes with
+mutable members inside each:
+
+```
+Storage  ->  OP13 Box, Box 1, Leather Box
+Binder   ->  Mewtwo Binder, Black Binder, Red Binder
+Loose    ->  Counter, Floor1
+Loan     ->  Friend 1, Friend 2
+Decks    ->  Shirahoshi Deck, Law Deck, Luffy ST Deck
+```
+
+That is exactly **two levels** — a fixed class, then instances. It is not a
+general tree, so `storage_locations` gets a `kind` column and **no `parent_id`**.
+The grouping the owner drew is produced by ordering on `kind`, not by recursion.
+A tree would have cost a tree-picker in every UI surface, cycle protection on
+reparent, and recursive containment queries, to express a shape one column
+already expresses.
+
+> `parent_id` stays deferrable on purpose. It is a nullable column with nothing
+> to backfill, so unlike `kind` it is *not* cheaper today than later. If binders
+> ever need named sections, add it then.
+
+**`kind` is `storage | binder | loose | loan` — four, not five.** Decks are the
+fifth category the UI shows, but they live in `decks`, because a deck has a
+leader, a card list and a physical flag that no binder has. Mirroring decks into
+`storage_locations` would give two tables the power to define a deck, and they
+would drift. The seam is invisible in the UI: `collection.show()` already returns
+deck membership and placements together, which is what "where is this card?"
+actually needs.
+
+**Names are unique per kind, not globally** — `UNIQUE(name, kind)`. A box and a
+binder may both reasonably be called "Box 1".
+
+The cost of that: a bare name can match more than one location. Rather than
+guess, lookups raise `AmbiguousLocation` and the caller passes `--kind` — the
+same refusal-to-guess principle as D-017.
+
+```
+$ place OP05-097 "Box 1" 2
+error: 'Box 1' exists as binder and as storage - say which with --kind
+```
+
+Landed while all three tables were still empty, so it was a schema edit and a
+`--reset`, never a migration.
+
+---
+
+## D-026 — Delete the `available_cards` view
+
+**2026-09-15** · *Supersedes the view half of [D-009](#d-009--availability-is-computed-never-stored); the over-subtraction caveat in [D-016](#d-016--deck-import-credits-the-base-printing) no longer applies*
+
+The view reported `owned`, `committed` and `available` per **printing**, but
+commitment is **gameplay-level** (D-003): a decklist says `OP05-097` without
+naming an art. So the same committed figure was joined onto every printing row.
+Own 4 plain and 2 parallel with 3 sleeved, and it read `(4,3,1)` and `(2,3,-1)`
+— subtracting one commitment twice. Its own docstring told callers to aggregate
+per `base_card_id` to undo it.
+
+It was never fixable in that shape. Rolling the view up to `base_card_id` would
+have made it correct and *still* useless, because the question that matters when
+looking at a deck is "available **to this deck**", and a deck does not compete
+with itself (`decks.py:272`). SQL has no way to know which deck is asking.
+
+Meanwhile the correct computation already existed and shipped:
+
+- `collection.show()` — `_committed()` and `_owned_total()` aggregate per
+  `base_card_id`, so the commitment is subtracted exactly once.
+- `decks.show_deck()` — `available_to_deck`, where only *other* physical decks
+  subtract.
+
+Nothing in `src/` ever read the view. Its only consumers were assertions in
+`test_decks.py`, `test_schema.py` and `test_setup_scripts.py` — tests checking a
+formula that nothing shipped, which is how it stayed wrong without failing.
+
+Deleted rather than fixed, because the thing it would become is `show()`.
+
+**The trigger was Phase 2.** `GET /api/cards` is exactly what reaches for a view
+named `available_cards`, and it would have been wrong for every card owned in
+more than one printing — quietly, and only for the cards a collector most likely
+owns twice. Removing it before the API layer existed cost one afternoon of test
+edits.
+
+Two behaviours changed with it, both improvements:
+
+- A real card you own **none** of now reports `0/0/0` instead of vanishing. The
+  view inner-joined `collection`, so a card browser would have had to paper over
+  the absence.
+- `None` now means "not a real card", not "not in your collection".
+
+`db_setup.VIEWS` is empty and `create_schema` makes no views. `LEGACY_VIEW_NAMES`
+still carries `available_cards` so `--reset` drops it from databases created
+before this entry; remove it when no such database is in use.
+
+---
+
+## D-027 — Attribute and life are synced; `rotation_block` is not
+
+**2026-09-15**
+
+Three card fields were added together because they are the last changes `cards`
+needed before real collection data goes in, and while the tables are empty a
+schema edit is a `--reset` rather than a migration.
+
+**`attribute` and `life` were free — the API already sent them.** Sync simply
+discarded both, which is why `normalize_attributes` had sat as dead code since
+Phase 0, called by nothing but its own tests. Checked against all 4,459 cached
+rows:
+
+| Category | Rows | Has life | Has attribute |
+|---|---|---|---|
+| Character | 3,537 | 0 | 3,531 |
+| Event | 559 | 0 | 0 |
+| Leader | 297 | **297** | 296 |
+| Stage | 66 | 0 | 0 |
+
+So **life is Leaders-only**, and `normalize_life` guards on category exactly as
+`normalize_counter` does — a shifted row cannot give a Character a life total.
+
+The dead `normalize_attributes` turned out to be **insufficient**, not merely
+unused: it split on `/` only, while the API separates most dual attributes with
+a space (`"Slash Strike"`). It now splits on both and validates against the five
+real attributes, which also drops the three junk values in the feed — `"?"`,
+`"N/A"`, and `"Straw Hat Crew ODYSSEY"` on `OP09-033`. Attribute is a closed set
+in this game, so validating is safe in a way it would not be for sub-types.
+
+**`rotation_block` ships as an empty column, on purpose.**
+
+Block is printed on every card and absent from every one of the 19 fields
+OptcgAPI serves. It is a property of a *set*, so one `{set_code: block}` mapping
+would derive it for every card — the `SEED_TYPES` pattern. Two things block
+writing that mapping today:
+
+1. **No trusted source.** Guessing where the set boundaries fall produces
+   confidently wrong legality answers, which is worse than none.
+2. **`set_code` is not yet consistent.** The feed serves `OP-01` *and* `OP01`,
+   `ST-01` *and* `ST01`, `EB-01` *and* `EB04`, plus composites like
+   `OP14-EB04` — 68 distinct values for far fewer real sets. A key written one
+   way silently misses the other spelling.
+
+The column lands now anyway because adding it later, once the collection is
+entered, means an `ALTER TABLE` against data that matters.
+
+`is_rotation_legal` is **tri-state**: `None` for an unknown block, not `False`.
+With the mapping empty, returning `False` would mark the entire collection
+illegal. The legality rule itself is settled — block 1 has rotated out, anything
+from block 2 up is legal (`ROTATION_LEGAL_FROM = 2`).
+
+`test_rotation.py` asserts `SET_BLOCKS == {}`. That test is designed to fail the
+moment someone populates the mapping, as the prompt to write the tests it then
+deserves.
+
+---
+
+## D-028 — Set and product are different fields
+
+**2026-09-15** · *Clears blocker 2 in [D-027](#d-027--attribute-and-life-are-synced-rotation_block-is-not); extends [D-003](#d-003--collection-is-printing-level-decks-are-gameplay-level) to sets*
+
+`set_code` looked broken. 1,187 of 4,338 cards carry a `set_code` that disagrees
+with their own card id - `OP14-120` is filed under `OP14-EB04`, and an OP05 card
+can arrive stamped `PRB-01`. The first read was that the field was wrong for a
+quarter of the collection.
+
+**It isn't wrong. It answers a different question.** One gameplay card, Koala:
+
+| card_image_id | game_set | set_code | printing_kind |
+|---|---|---|---|
+| `OP05-006` | OP05 | `OP-05` | base |
+| `OP05-006_p1` | OP05 | `OP-05` | parallel |
+| `OP05-006_p3` | OP05 | `PRB-01` | parallel |
+| `OP05-006_r1` | OP05 | `PRB-01` | reprint |
+| `EB03_OP05-006_p1` | OP05 | `EB-03` | parallel |
+
+Every `set_code` there is correct. `_r1` is a **reprint** that came in the PRB-01
+premium booster; `EB03_OP05-006_p1` came in EB-03. They are OP05 cards printed
+in other products. So there are two real axes, and this is the same printing-vs-
+gameplay split D-003 already draws, applied to sets:
+
+- **`set_code`** - the *product* a printing came in. Kept exactly as the API
+  sends it. Answers "which box did this come out of".
+- **`game_set`** - the *set the card belongs to*, derived from `base_card_id`.
+  Answers "is this an OP05 card", which is what rotation and filtering need.
+
+**Why derive rather than clean `set_code`:** it cannot answer the question even
+in principle. There is no `OP-14` or `OP-15` in the feed at all - those sets sit
+under `OP14-EB04` / `OP15-EB04`, mixed with EB04 cards and strays from eight
+other sets. The promo feed also drops the hyphen (`OP01`, not `OP-01`) on 163
+cards, all rarity PR. `base_card_id` has none of that: 53 clean prefixes across
+all 4,338 rows, nothing unparseable, including the two `EB03_OP05-…` ids that
+`strip_printing_suffix` already resolves correctly.
+
+So `SET_BLOCKS` in `rotation.py` is now keyed on `game_set` - 53 stable values
+instead of 68 product spellings. The only thing still missing for D-027 is a
+trusted block mapping.
+
+**`printing_kind` came out of the same investigation.** The variant suffix
+already encoded the alt-art axis; classifying it makes it queryable:
+
+| kind | cards | suffix |
+|---|---|---|
+| base | 2,648 | none |
+| parallel | 1,106 | `p1`-`p8` |
+| reprint | 328 | `r1`-`r3` |
+| promo | 256 | `pr1`-`pr12` |
+
+Nothing is unclassified. `pr` is matched before `p`, or every promo reads as a
+parallel. This is what D-016 needs to stay honest - import credits the base
+printing, and a picker can now offer the other three kinds by name rather than
+by asking the user to know that `_r1` means reprint.
+
+**One id was repaired in passing.** `OP04-016_P1` shipped with an uppercase
+variant where all 691 other parallels use lowercase. `normalize_card_image_id`
+now folds the suffix, so one printing stops being two primary keys. Verified
+collision-free across all 4,338 ids before folding.
+
+---
+
+## D-029 — The API reuses printing ids; sync resolves them
+
+**2026-09-15** · *Fixes a Phase 0 defect; extends [D-014](#d-014--normalize-printing-keys-and-gameplay-identities) and [D-028](#d-028--set-and-product-are-different-fields)*
+
+Sync assumed one `card_image_id` names one printing. The API doesn't honour
+that. Across its three feeds, **118 ids each label two or three physically
+different cards**, and `INSERT OR REPLACE` let whichever row came last win.
+Promos are fetched last, so the promo won 63 times; 41 more collisions live
+inside a single feed and were decided by whatever order the API returned.
+
+The regular `OP01-016` Nami and her alt-art promo both arrive as `OP01-016`.
+The promo row carries a typo — counter 1000 instead of 2000 — and because it
+overwrote the regular card, **the regular Nami had counter 1000** in every
+database this project ever built. 180 base printings carried rarity PR. 53
+carried pre-errata text. Nothing logged it, and 376 tests passed, because no
+test compared the feeds against each other.
+
+**Same id means same card.** A reprint, foil or promo of `OP01-016` is
+mechanically identical to it — that's a rule of the game, not a data
+convention. So the fix has two halves, both in `src/collisions.py` (pure, no
+DB), run before any row is sanitized:
+
+1. **Every row gets a unique id.** The base row keeps the API's id — chosen
+   deterministically: plain image filename, `set_code` matching `game_set`,
+   not from the promo feed, shortest name, then image URL. Feed order never
+   decides. Each other row is re-identified, cheapest rule first:
+
+   | rule | source of the new id | cases |
+   |---|---|---|
+   | image filename carries a real `_p1`/`_r1` id | `OP07-076_r1.jpg` → `OP07-076_r1` | 10 |
+   | slug of what the name adds to the base name | `Nami - OP01-016 (Alternate Art)` → `OP01-016_alternate_art` | 107 |
+   | that plus the set code, then an ordinal | never reached today | 0 |
+
+   The API's own image storage had hit the same collisions — a second file
+   wanting `OP04-056_p2.jpg` became `OP04-056_p2_6KicMKv.jpg`. That random
+   token is the one thing in the feed that separates all 118 pairs, and it is
+   deliberately **not** used: it means nothing and could change. The name
+   part of a filename is used only when it is a real printing id.
+
+2. **Gameplay fields are inherited from the base row.** Cost, power, counter,
+   colour, attribute, life, effect and sub-types are copied onto every
+   re-identified row. It keeps its own name, image, rarity and `set_code` —
+   the things that actually differ between printings. A typo on a promo can
+   no longer reach the regular card, and can't survive on the promo either.
+
+**Four ids were the same row listed twice** — `ST25-001 Alvida` and three
+others, identical in every field but the image token. Those collapse to one
+row rather than becoming two printings.
+
+**Rows with no image** (61, mostly promos) fall through to the name rule. Six
+of them collide; the name separates all six.
+
+Result on the current cache: 4,459 rows → **4,455 printings, 0 collisions**.
+Nami is `counter 2000, R, base`; her promo is `OP01-016_alternate_art, PR,
+promo`, counter 2000. The only base printings still rated PR are the 118
+cards of the promo set itself, which is correct.
+
+**Synthesised ids are stable as long as names are.** They derive from the
+card's name and id, not from image tokens or feed order. If the API renames a
+card, that printing re-identifies and the old row goes stale — which the
+planned stale-printing check will report. Accepted.
+
+**Left visible on purpose:** `OP01-016_p2 Nami (SP)` has counter 1000 too. It
+isn't a collision — it has its own id — so this entry doesn't touch it. The
+same-id-same-card rule argues that *every* printing should inherit gameplay
+fields from its base printing, not only re-identified ones. That's a broader
+decision for the collection re-keying, where gameplay data moves to
+`base_card_id` anyway.

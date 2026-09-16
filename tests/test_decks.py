@@ -11,7 +11,7 @@ import unittest
 from unittest import mock
 
 from src.db_setup import create_schema
-from src.collection import add
+from src.collection import add, show
 from src.decks import (
     DeckError,
     DeckNameExists,
@@ -64,6 +64,17 @@ def decklist(counts: dict[str, int] | None = None, leader: str | None = LEADER) 
     lines.append("Character:")
     lines += [f"{qty} Card {cid}" for cid, qty in counts.items()]
     return "\n".join(lines) + "\n"
+
+
+def availability(conn, base_card_id):
+    """(owned, committed, available) for one gameplay card.
+
+    Aggregated per base_card_id, which is the level commitment works at
+    (D-003): this fixture gives every card an alt art, so a per-printing
+    reading would subtract the same commitment twice.
+    """
+    status = show(conn, base_card_id)
+    return (status.total_owned, status.committed, status.available)
 
 
 def owned(conn, card_image_id):
@@ -125,19 +136,13 @@ class ImportBasicsTests(unittest.TestCase):
 
     def test_locked_cards_show_in_availability(self):
         import_decklist(self.conn, decklist(), "Red Luffy", is_physical=True)
-        row = self.conn.execute(
-            "SELECT owned, committed, available FROM available_cards "
-            "WHERE card_image_id = 'OP05-002'"
-        ).fetchone()
-        self.assertEqual(row, (4, 4, 0))
+        self.assertEqual(availability(self.conn, "OP05-002"), (4, 4, 0))
 
     def test_wishlist_deck_locks_nothing(self):
         import_decklist(self.conn, decklist(), "Real", is_physical=True)
         import_decklist(self.conn, decklist(), "Someday", is_physical=False)
-        row = self.conn.execute(
-            "SELECT owned, committed FROM available_cards WHERE card_image_id = 'OP05-002'"
-        ).fetchone()
-        self.assertEqual(row, (4, 4))  # only the physical deck counts
+        owned_, committed, _ = availability(self.conn, "OP05-002")
+        self.assertEqual((owned_, committed), (4, 4))  # only the physical deck counts
 
     def test_empty_name_refused(self):
         with self.assertRaises(DeckError):
@@ -249,10 +254,8 @@ class NameConflictTests(unittest.TestCase):
             self.conn, decklist(counts), "Red Luffy", is_physical=True, on_conflict="replace"
         )
         self.assertEqual(owned(self.conn, "OP05-002"), 4)  # still owned
-        row = self.conn.execute(
-            "SELECT committed, available FROM available_cards WHERE card_image_id = 'OP05-002'"
-        ).fetchone()
-        self.assertEqual(row, (0, 4))  # now free to use
+        _, committed, available = availability(self.conn, "OP05-002")
+        self.assertEqual((committed, available), (0, 4))  # now free to use
 
     def test_new_creates_a_second_deck_and_credits_again(self):
         result = import_decklist(
@@ -266,11 +269,7 @@ class NameConflictTests(unittest.TestCase):
         import_decklist(
             self.conn, decklist(), "Red Luffy", is_physical=False, on_conflict="replace"
         )
-        row = self.conn.execute(
-            "SELECT owned, committed, available FROM available_cards "
-            "WHERE card_image_id = 'OP05-002'"
-        ).fetchone()
-        self.assertEqual(row, (4, 0, 4))
+        self.assertEqual(availability(self.conn, "OP05-002"), (4, 0, 4))
 
 
 class AtomicityTests(unittest.TestCase):
@@ -428,29 +427,18 @@ class ManagementTests(unittest.TestCase):
     def test_delete_frees_availability(self):
         import_decklist(self.conn, decklist(), "Red Luffy", is_physical=True)
         delete_deck(self.conn, "Red Luffy")
-        row = self.conn.execute(
-            "SELECT owned, committed, available FROM available_cards "
-            "WHERE card_image_id = 'OP05-002'"
-        ).fetchone()
-        self.assertEqual(row, (4, 0, 4))
+        self.assertEqual(availability(self.conn, "OP05-002"), (4, 0, 4))
 
     def test_set_physical_locks_cards(self):
         import_decklist(self.conn, decklist(), "Someday", is_physical=False)
         add(self.conn, "OP05-002", 4)
         set_physical(self.conn, "Someday", True)
-        row = self.conn.execute(
-            "SELECT committed FROM available_cards WHERE card_image_id = 'OP05-002'"
-        ).fetchone()
-        self.assertEqual(row[0], 4)
+        self.assertEqual(availability(self.conn, "OP05-002")[1], 4)
 
     def test_set_physical_off_frees_cards(self):
         import_decklist(self.conn, decklist(), "Red Luffy", is_physical=True)
         set_physical(self.conn, "Red Luffy", False)
-        row = self.conn.execute(
-            "SELECT owned, committed, available FROM available_cards "
-            "WHERE card_image_id = 'OP05-002'"
-        ).fetchone()
-        self.assertEqual(row, (4, 0, 4))
+        self.assertEqual(availability(self.conn, "OP05-002"), (4, 0, 4))
 
     def test_set_physical_warns_when_you_do_not_own_the_cards(self):
         import_decklist(self.conn, decklist(), "Someday", is_physical=False)

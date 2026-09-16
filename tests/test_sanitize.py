@@ -12,12 +12,15 @@ import unittest
 from src.sanitize import (
     detect_keywords,
     extract_printing_variant,
+    game_set_from_id,
     normalize_attributes,
     normalize_colors,
     normalize_counter,
     normalize_card_image_id,
+    normalize_life,
     normalize_null,
     parse_subtypes,
+    printing_kind,
     repair_field_shift,
     strip_printing_suffix,
     to_int,
@@ -95,6 +98,48 @@ class NormalizeAttributesTests(unittest.TestCase):
 
     def test_null(self):
         self.assertIsNone(normalize_attributes(""))
+
+    def test_space_separated_duals(self):
+        """The form the API actually uses for most dual attributes."""
+        self.assertEqual(normalize_attributes("Slash Strike"), "Slash/Strike")
+        self.assertEqual(normalize_attributes("Ranged Strike"), "Ranged/Strike")
+        self.assertEqual(normalize_attributes("Special Wisdom"), "Special/Wisdom")
+
+    def test_single_values_survive(self):
+        for value in ["Slash", "Strike", "Ranged", "Special", "Wisdom"]:
+            self.assertEqual(normalize_attributes(value), value)
+
+    def test_casing_is_canonicalised(self):
+        self.assertEqual(normalize_attributes("slash strike"), "Slash/Strike")
+        self.assertEqual(normalize_attributes("SLASH"), "Slash")
+
+    def test_junk_the_api_actually_serves(self):
+        """Every non-attribute value present in the 4,459 cached rows."""
+        self.assertIsNone(normalize_attributes("N/A"))          # 2 reprint stages
+        self.assertIsNone(normalize_attributes("?"))            # Imu, 2 printings
+        self.assertIsNone(normalize_attributes("Straw Hat Crew ODYSSEY"))  # OP09-033
+
+    def test_unknown_tokens_are_dropped_not_kept(self):
+        self.assertEqual(normalize_attributes("Slash Nonsense"), "Slash")
+        self.assertIsNone(normalize_attributes("Nonsense Entirely"))
+
+    def test_duplicates_collapse(self):
+        self.assertEqual(normalize_attributes("Slash Slash"), "Slash")
+
+
+class NormalizeLifeTests(unittest.TestCase):
+    def test_leaders_keep_life(self):
+        self.assertEqual(normalize_life("Leader", "5"), 5)
+        self.assertEqual(normalize_life("Leader", 4), 4)
+
+    def test_everything_else_is_none(self):
+        for category in ["Character", "Event", "Stage"]:
+            self.assertIsNone(normalize_life(category, "5"), msg=category)
+
+    def test_null_likes(self):
+        self.assertIsNone(normalize_life("Leader", "NULL"))
+        self.assertIsNone(normalize_life("Leader", "?"))
+        self.assertIsNone(normalize_life(None, "5"))
 
 
 class ParseSubtypesTests(unittest.TestCase):
@@ -205,6 +250,11 @@ class RepairFieldShiftTests(unittest.TestCase):
 
 
 class NormalizeCardImageIdTests(unittest.TestCase):
+    def test_variant_case_is_folded(self):
+        """'OP04-016_P1' and '_p1' are one printing, not two primary keys."""
+        from src.sanitize import normalize_card_image_id as norm
+        self.assertEqual(norm("OP04-016_P1"), "OP04-016_p1")
+
     def test_clean_ids_untouched(self):
         for value in ["OP05-097", "OP05-097_p1", "EB03_OP05-006_p1", "P-029"]:
             self.assertEqual(normalize_card_image_id(value), value, msg=repr(value))
@@ -294,3 +344,59 @@ class DetectKeywordsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GameSetFromIdTests(unittest.TestCase):
+    """Rule 13 — the set a card belongs to, from base_card_id (D-028)."""
+
+    def test_main_sets(self):
+        self.assertEqual(game_set_from_id("OP05-006"), "OP05")
+        self.assertEqual(game_set_from_id("OP16-001"), "OP16")
+
+    def test_starter_extra_and_premium(self):
+        self.assertEqual(game_set_from_id("ST30-001"), "ST30")
+        self.assertEqual(game_set_from_id("EB04-061"), "EB04")
+        self.assertEqual(game_set_from_id("PRB02-001"), "PRB02")
+
+    def test_promos_are_their_own_set(self):
+        self.assertEqual(game_set_from_id("P-024"), "P")
+
+    def test_the_sets_the_api_set_code_cannot_name(self):
+        """OP14/OP15 exist only as 'OP14-EB04' in set_code; the id knows."""
+        self.assertEqual(game_set_from_id("OP14-120"), "OP14")
+        self.assertEqual(game_set_from_id("OP15-001"), "OP15")
+
+    def test_null_likes(self):
+        for value in [None, "", "NULL", "?"]:
+            self.assertIsNone(game_set_from_id(value), msg=repr(value))
+
+    def test_unparseable_returns_none_rather_than_guessing(self):
+        self.assertIsNone(game_set_from_id("nonsense"))
+
+
+class PrintingKindTests(unittest.TestCase):
+    """Rule 14 — base / parallel / reprint / promo (D-028)."""
+
+    def test_no_variant_is_the_base_printing(self):
+        self.assertEqual(printing_kind(None), "base")
+        self.assertEqual(printing_kind(""), "base")
+
+    def test_parallels(self):
+        for v in ["p1", "p2", "p8"]:
+            self.assertEqual(printing_kind(v), "parallel", msg=v)
+
+    def test_reprints(self):
+        for v in ["r1", "r2", "r3"]:
+            self.assertEqual(printing_kind(v), "reprint", msg=v)
+
+    def test_promos_beat_parallels_on_prefix_order(self):
+        """'pr1' starts with 'p' — testing 'p' first would call it parallel."""
+        for v in ["pr1", "pr9", "pr12"]:
+            self.assertEqual(printing_kind(v), "promo", msg=v)
+
+    def test_uppercase_variant(self):
+        """OP04-016 ships as '_P1' where 691 other parallels use '_p1'."""
+        self.assertEqual(printing_kind("P1"), "parallel")
+
+    def test_unknown_suffix_is_unclassified_not_guessed(self):
+        self.assertIsNone(printing_kind("zz9"))
