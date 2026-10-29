@@ -451,7 +451,7 @@ def print_stale_report(report: StaleReport) -> None:
                 for h in s.holdings:
                     print(f"        optcg collection set-art {s.base_card_id} "
                           f"{h.quantity} {new} --from-art {s.card_image_id} "
-                          f"--in \"{h.container}\" --kind {h.kind}")
+                          f"--in \"{h.container}\" --type {h.kind}")
             elif s.candidates:
                 print(f"      new printings of {s.base_card_id} this sync: "
                       f"{', '.join(s.candidates)} - check which one it is")

@@ -16,6 +16,40 @@ from pathlib import Path
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "optcg.db"
 
+#: Storage types the app depends on - just-loose is 'loose', and `loan` lends
+#: only to 'loan' places. They can't be removed (D-040).
+BUILTIN_STORAGE_TYPES = ("loose", "loan")
+#: What a fresh database starts with; the owner adds the rest.
+STARTER_STORAGE_TYPES = ("binder", "booster-box", "bulk")
+
+STORAGE_TYPES_DDL = """
+    -- What a storage place can be: binder, bulk, booster-box, ... The owner
+    -- adds their own (D-040). `builtin` marks the two the app depends on:
+    -- 'loose' (just-loose) and 'loan' (the loan command).
+    CREATE TABLE IF NOT EXISTS storage_types (
+        name     TEXT PRIMARY KEY,
+        builtin  BOOLEAN NOT NULL DEFAULT 0,
+        added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """
+
+# A template because the upgrade below rebuilds the table under a temporary
+# name. The type is the user-facing word; the column keeps its old name,
+# `kind`, so no query had to change (D-040).
+STORAGE_LOCATIONS_DDL = """
+    CREATE TABLE {table} (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        name       TEXT NOT NULL,
+        kind       TEXT NOT NULL REFERENCES storage_types(name),
+        notes      TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        -- Name is unique per type, not globally: a box and a binder may both
+        -- reasonably be called 'Box 1'. Decks are the fifth category and live
+        -- in `decks`, not here.
+        UNIQUE(name, kind)
+    )
+    """
+
 TABLES: list[str] = [
     """
     CREATE TABLE IF NOT EXISTS cards (
@@ -77,20 +111,8 @@ TABLES: list[str] = [
         detected_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """,
-    """
-    CREATE TABLE IF NOT EXISTS storage_locations (
-        id         INTEGER PRIMARY KEY AUTOINCREMENT,
-        name       TEXT NOT NULL,
-        kind       TEXT NOT NULL DEFAULT 'storage'
-                   CHECK(kind IN ('storage', 'binder', 'loose', 'loan')),
-        notes      TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        -- Name is unique per kind, not globally: a box and a binder may both
-        -- reasonably be called 'Box 1'. Decks are the fifth category and live
-        -- in `decks`, not here.
-        UNIQUE(name, kind)
-    )
-    """,
+    STORAGE_TYPES_DDL,
+    STORAGE_LOCATIONS_DDL.format(table="IF NOT EXISTS storage_locations"),
     """
     CREATE TABLE IF NOT EXISTS decks (
         id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -186,6 +208,7 @@ TABLE_NAMES = [
     "deck_cards",
     "decks",
     "storage_locations",
+    "storage_types",
     "skipped_cards_log",
     "unknown_type_log",
     "card_types",
@@ -215,9 +238,23 @@ def drop_all(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def seed_storage_types(conn: sqlite3.Connection) -> None:
+    conn.executemany(
+        "INSERT OR IGNORE INTO storage_types (name, builtin) VALUES (?, 1)",
+        [(t,) for t in BUILTIN_STORAGE_TYPES],
+    )
+    conn.executemany(
+        "INSERT OR IGNORE INTO storage_types (name) VALUES (?)",
+        [(t,) for t in STARTER_STORAGE_TYPES],
+    )
+
+
 def create_schema(conn: sqlite3.Connection) -> None:
     for stmt in TABLES:
         conn.execute(stmt)
+    seed_storage_types(conn)
+    conn.commit()
+    upgrade(conn)
     for stmt in INDEXES:
         conn.execute(stmt)
     for stmt in VIEWS:
@@ -227,6 +264,58 @@ def create_schema(conn: sqlite3.Connection) -> None:
         (DEFAULT_LOOSE_LOCATION, "built-in: copies with no container named"),
     )
     conn.commit()
+
+
+def needs_upgrade(conn: sqlite3.Connection) -> bool:
+    """True for a database from before D-040: location kinds were a fixed CHECK list."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'storage_locations'"
+    ).fetchone()
+    return bool(row and "CHECK(kind IN" in row[0])
+
+
+def upgrade(conn: sqlite3.Connection) -> list[str]:
+    """Bring an older database up to the current schema. Returns what changed.
+
+    Callers that hold real data snapshot before calling (the CLI does). Every
+    location keeps its kind exactly - a kind the starter list doesn't have,
+    like the old default 'storage', becomes a type of its own rather than
+    being reinterpreted as something else.
+    """
+    if not needs_upgrade(conn):
+        return []
+
+    conn.execute(STORAGE_TYPES_DDL)
+    seed_storage_types(conn)
+    conn.execute(
+        "INSERT OR IGNORE INTO storage_types (name) SELECT DISTINCT kind FROM storage_locations"
+    )
+    conn.commit()
+
+    # SQLite can't drop a CHECK in place: rebuild the table and swap it in.
+    # Foreign keys go off for the swap - copies point at storage_locations by
+    # name, and the old table is briefly gone - and are verified before commit.
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN")
+        conn.execute(STORAGE_LOCATIONS_DDL.format(table="storage_locations_upgrade"))
+        conn.execute(
+            "INSERT INTO storage_locations_upgrade (id, name, kind, notes, created_at) "
+            "SELECT id, name, kind, notes, created_at FROM storage_locations"
+        )
+        conn.execute("DROP TABLE storage_locations")
+        conn.execute("ALTER TABLE storage_locations_upgrade RENAME TO storage_locations")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_locations_kind ON storage_locations(kind)")
+        broken = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if broken:
+            raise sqlite3.IntegrityError(f"upgrade would break {len(broken)} reference(s)")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+    return ["storage types are now a list you can add to (D-040)"]
 
 
 def main() -> None:

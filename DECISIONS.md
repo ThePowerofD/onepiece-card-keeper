@@ -53,6 +53,7 @@ knowing why it's that way? If not, it doesn't need an entry.
 | [D-037](#d-037--cards-can-be-named-a-shared-name-asks-which) | Cards can be named; a shared name asks which | 2026-10-29 |
 | [D-038](#d-038--every-error-says-what-to-do-next) | Every error says what to do next | 2026-10-29 |
 | [D-039](#d-039--your-collection-is-what-you-own-browse-is-everything) | Your collection is what you own; `browse` is everything | 2026-10-29 |
+| [D-040](#d-040--storage-places-have-a-type-from-a-list-you-add-to) | Storage places have a type, from a list you add to | 2026-10-29 |
 
 ---
 
@@ -1330,3 +1331,45 @@ the help.
 `collection.list_cards` keeps its `owned_only` parameter: Phase 2's card grid
 (`GET /api/cards`) is a browser with an owned filter, which is a different screen
 from the collection.
+
+---
+
+## D-040 — Storage places have a type, from a list you add to
+
+**2026-10-29** · *Supersedes the fixed kind list of [D-025](#d-025--locations-have-a-kind-decks-are-the-fifth-category); renames `location` to `storage`*
+
+The owner couldn't find where binders and boxes were: they lived under
+`location`, which isn't a word anyone holding a binder thinks of. And the four
+kinds D-025 fixed - storage, binder, loose, loan - didn't match their shelf.
+
+**The group is `storage`**, and what D-025 called a place's *kind* is its
+**type**: `storage add "Binder A" --type binder`. The schema column keeps its
+name, `kind` - renaming it would touch every query to change a word nobody
+sees, and "type" already means card types inside the code.
+
+**Types are a table the owner adds to, not a CHECK list.** `storage_types`,
+which `storage_locations.kind` references. Two are **built in** because code
+depends on them: `loose` (`just-loose` is one) and `loan` (`loan` lends only to
+them). The rest are labels, and a fresh database starts with **binder,
+booster-box and bulk** - the owner's own boxes. `storage type add deck-box`
+adds more; names are one lower-case word with dashes (`display case` ->
+`display-case`) so they follow `--type` without quotes. The old `storage` kind
+is gone from the starter list: it was a description, not a type.
+
+**Nothing is ever created by a typo.** A type or place that doesn't exist is
+*offered*, with a "did you mean" first when it's close to one that does:
+`storage add` with no `--type` asks which, `--type bindr` offers `binder`, and
+moving or adding cards `--to "Bindr A"` offers the existing `Binder A` before
+creating anything. Only destinations get the offer - an empty place to take
+cards *from* is never what was meant, so a missing `--from` is just an error.
+Lending to someone new creates them as a `loan` place.
+
+**Existing databases upgrade themselves** on the first command, after an
+automatic snapshot: the table is rebuilt without its CHECK (SQLite can't drop
+one in place), with foreign keys verified before commit. Every place keeps its
+kind exactly - a kind outside the starter list, like the old default
+`storage`, becomes a type of its own rather than being reinterpreted. Exports
+carry the type list, so a type with no places yet survives a move between
+machines, and import never removes a type.
+
+`location` no longer works - the same clean break as `src.cli` (D-036).

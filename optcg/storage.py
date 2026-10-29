@@ -1,9 +1,12 @@
-"""Containers — the places copies live (D-025, D-030).
+"""Containers — the places copies live (D-025, D-030, D-040).
 
-A copy is in exactly one container: a storage location (storage / binder /
-loose / loan) or a physical deck. Decks keep their own table because a deck has
-a leader and a recipe that no binder has, but as a *container* they behave
-identically, so `resolve_container` returns either.
+A copy is in exactly one container: a storage place (a binder, a bulk box, the
+loose pile, a friend on loan, ...) or a physical deck. Decks keep their own
+table because a deck has a leader and a recipe that no binder has, but as a
+*container* they behave identically, so `resolve_container` returns either.
+
+What a place can be is its **type**, a list the owner adds to (D-040). In the
+schema the column is still `kind`; only the word people see changed.
 
 `just-loose` is the built-in loose pile: where copies go when no container is
 named, and where they come from when none is named. It can't be renamed or
@@ -12,10 +15,12 @@ deleted, because every operation with no container falls back to it.
 
 from __future__ import annotations
 
+import difflib
+import re
 import sqlite3
 from typing import NamedTuple
 
-from optcg.db_setup import DEFAULT_LOOSE_LOCATION
+from optcg.db_setup import BUILTIN_STORAGE_TYPES, DEFAULT_LOOSE_LOCATION
 
 
 class StorageError(Exception):
@@ -27,17 +32,39 @@ class AmbiguousLocation(StorageError):
 
     def __init__(self, name: str, kinds: list[str]):
         super().__init__(
-            f"{name!r} exists as {' and as '.join(kinds)} - say which with --kind"
+            f"{name!r} exists as {' and as '.join(kinds)} - say which with --type"
         )
         self.name = name
         self.kinds = kinds
 
 
-#: The four storage classes. Decks are the fifth category (D-025) and live in
-#: `decks`, but `--kind deck` resolves one as a container.
-LOCATION_KINDS = ("storage", "binder", "loose", "loan")
+class NoSuchPlace(StorageError):
+    """No storage place or deck has this name. Carries close names, for a 'did you mean'."""
+
+    def __init__(self, message: str, name: str, close: list["Container"]):
+        super().__init__(message)
+        self.name = name
+        self.close = close
+
+
+class UnknownType(StorageError):
+    """A storage type that doesn't exist yet. Carries close types."""
+
+    def __init__(self, name: str, close: list[str], known: list[str]):
+        hint = f" - did you mean {close[0]!r}?" if close else ""
+        super().__init__(
+            f"{name!r} isn't a storage type{hint} (types: {', '.join(known)}; "
+            f"add one with `storage type add`)"
+        )
+        self.name = name
+        self.close = close
+
+
+#: Decks are the fifth category (D-025) and live in `decks`, but `--type deck`
+#: resolves one as a container wherever a place can be named.
 DECK_KIND = "deck"
-CONTAINER_KINDS = LOCATION_KINDS + (DECK_KIND,)
+
+_TYPE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 
 class Container(NamedTuple):
@@ -65,11 +92,61 @@ class LocationSummary(NamedTuple):
 # resolution
 # --------------------------------------------------------------------------
 
-def _require_kind(kind: str, allow_deck: bool = False) -> str:
-    allowed = CONTAINER_KINDS if allow_deck else LOCATION_KINDS
-    if kind not in allowed:
-        raise StorageError(f"unknown kind {kind!r} - one of {', '.join(allowed)}")
-    return kind
+# --------------------------------------------------------------------------
+# types
+# --------------------------------------------------------------------------
+
+class TypeSummary(NamedTuple):
+    name: str
+    builtin: bool
+    places: int
+
+
+def storage_types(conn: sqlite3.Connection) -> list[str]:
+    return [name for (name,) in conn.execute("SELECT name FROM storage_types ORDER BY name")]
+
+
+def type_summaries(conn: sqlite3.Connection) -> list[TypeSummary]:
+    return [
+        TypeSummary(name, bool(builtin), places)
+        for name, builtin, places in conn.execute(
+            "SELECT t.name, t.builtin, COUNT(sl.id) FROM storage_types t "
+            "LEFT JOIN storage_locations sl ON sl.kind = t.name "
+            "GROUP BY t.name ORDER BY t.name"
+        )
+    ]
+
+
+def normalize_type(name: str) -> str:
+    """'Booster Box' -> 'booster-box': one word, so it can follow --type unquoted."""
+    return "-".join(name.strip().lower().split())
+
+
+def add_type(conn: sqlite3.Connection, name: str) -> str:
+    """Add a storage type. Returns the name as stored."""
+    clean = normalize_type(name)
+    if not _TYPE_NAME.match(clean):
+        raise StorageError(
+            f"{name!r} can't be a type name - use letters, numbers and dashes, e.g. deck-box"
+        )
+    if clean == DECK_KIND:
+        raise StorageError("'deck' is taken: decks are their own thing (`deck import`)")
+    if clean in storage_types(conn):
+        raise StorageError(f"{clean!r} is already a storage type")
+    conn.execute("INSERT INTO storage_types (name) VALUES (?)", (clean,))
+    conn.commit()
+    return clean
+
+
+def _require_kind(conn: sqlite3.Connection, kind: str, allow_deck: bool = False) -> str:
+    """The stored form of a type the owner typed, or UnknownType with suggestions."""
+    clean = normalize_type(kind)
+    if allow_deck and clean == DECK_KIND:
+        return clean
+    known = storage_types(conn)
+    if clean not in known:
+        raise UnknownType(clean, difflib.get_close_matches(clean, known, n=1), known)
+    return clean
 
 
 def _location_id(conn: sqlite3.Connection, name: str, kind: str | None = None) -> int:
@@ -115,11 +192,12 @@ def resolve_container(
     clean = str(name).strip()
 
     if kind is not None:
-        _require_kind(kind, allow_deck)
+        kind = _require_kind(conn, kind, allow_deck)
         if kind == DECK_KIND:
             rows = conn.execute("SELECT id FROM decks WHERE name = ?", (clean,)).fetchall()
             if not rows:
-                raise StorageError(f"no deck named {clean!r}")
+                raise NoSuchPlace(f"no deck named {clean!r}", clean,
+                                  _close_places(conn, clean, allow_deck))
             if len(rows) > 1:
                 ids = ", ".join(str(r[0]) for r in rows)
                 raise StorageError(
@@ -130,7 +208,8 @@ def resolve_container(
             "SELECT id FROM storage_locations WHERE name = ? AND kind = ?", (clean, kind)
         ).fetchone()
         if row is None:
-            raise StorageError(f"no {kind} named {clean!r} - create it with `location add`")
+            raise NoSuchPlace(f"no {kind} named {clean!r} - create it with `storage add`",
+                              clean, _close_places(conn, clean, allow_deck))
         return Container(row[0], None, kind, clean)
 
     matches = [
@@ -148,14 +227,26 @@ def resolve_container(
         ]
 
     if not matches:
-        raise StorageError(
-            f"no location or deck named {clean!r} - create it with `location add`"
-            if allow_deck
-            else f"no storage location named {clean!r} - create it with `location add`"
-        )
+        what = "storage place or deck" if allow_deck else "storage place"
+        raise NoSuchPlace(f"no {what} named {clean!r} - create it with `storage add`",
+                          clean, _close_places(conn, clean, allow_deck))
     if len(matches) > 1:
         raise AmbiguousLocation(clean, [m.kind for m in matches])
     return matches[0]
+
+
+def _close_places(conn: sqlite3.Connection, name: str, allow_deck: bool) -> list[Container]:
+    """Existing places whose name looks like a typo of `name`, closest first."""
+    places = [Container(loc_id, None, kind, loc_name) for loc_id, loc_name, kind in
+              conn.execute("SELECT id, name, kind FROM storage_locations")]
+    if allow_deck:
+        places += [Container(None, deck_id, DECK_KIND, deck_name) for deck_id, deck_name in
+                   conn.execute("SELECT id, name FROM decks")]
+    by_lower = {}
+    for p in places:
+        by_lower.setdefault(p.name.lower(), []).append(p)
+    close = difflib.get_close_matches(name.lower(), list(by_lower), n=3, cutoff=0.6)
+    return [p for c in close for p in by_lower[c]]
 
 
 # --------------------------------------------------------------------------
@@ -173,13 +264,14 @@ def _refuse_if_builtin(name: str, verb: str) -> None:
 def add_location(
     conn: sqlite3.Connection,
     name: str,
-    kind: str = "storage",
+    kind: str,
     notes: str | None = None,
 ) -> int:
+    """Create a storage place of a type that exists (D-040)."""
     clean = name.strip()
     if not clean:
-        raise StorageError("location name cannot be empty")
-    _require_kind(kind)
+        raise StorageError("a storage place needs a name")
+    kind = _require_kind(conn, kind)
     try:
         cur = conn.execute(
             "INSERT INTO storage_locations (name, kind, notes) VALUES (?, ?, ?)",
@@ -201,7 +293,7 @@ def list_locations(conn: sqlite3.Connection, kind: str | None = None) -> list[Lo
     ]
     params: list = []
     if kind is not None:
-        _require_kind(kind)
+        kind = _require_kind(conn, kind)
         sql.append("WHERE sl.kind = ? ")
         params.append(kind)
     sql.append("GROUP BY sl.id, sl.name, sl.kind, sl.notes ORDER BY sl.kind, sl.name")

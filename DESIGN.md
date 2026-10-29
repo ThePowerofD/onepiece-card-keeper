@@ -166,9 +166,13 @@ erDiagram
     }
     storage_locations {
         INTEGER id PK
-        TEXT name "'OP13 Box' - UNIQUE per kind, not globally"
-        TEXT kind "storage|binder|loose|loan (D-025)"
+        TEXT name "'OP13 Box' - UNIQUE per type, not globally"
+        TEXT kind FK "its storage type (D-040)"
         TEXT notes
+    }
+    storage_types {
+        TEXT name PK "binder, booster-box, bulk, ... or the owner's own"
+        BOOLEAN builtin "loose and loan - the app depends on them"
     }
     decks {
         INTEGER id PK
@@ -212,25 +216,33 @@ until the caller has done that.
 ### Where a card lives: five categories, two tables
 
 ```
-Storage  ┐
-Binder   │  storage_locations.kind  ┐
-Loose    │                          ├→  copies.location_id  or  copies.deck_id
-Loan     ┘                          │
-Decks    →  decks (the recipe)  ────┘
+Binder       ┐
+Booster box  │  storage_locations.kind ─→ storage_types  ┐
+Bulk  ...    │                                           ├→  copies.location_id  or  copies.deck_id
+Loose, Loan  ┘                                           │
+Decks        →  decks (the recipe)  ─────────────────────┘
 ```
+
+**Storage types are a list the owner adds to** (D-040): `storage_types`, which
+`storage_locations.kind` references. `loose` and `loan` are built in, because
+code depends on them - `just-loose` is a `loose` place, and `loan` lends only to
+`loan` places. Everything else is a label. Users see the word *type*; the
+column kept its name, `kind`.
 
 The owner thinks of all five as places a card can be (D-025), and a copy row
 treats them identically. **Decks still live in `decks`** because a deck also has
 a leader and a recipe that no binder has — but as a *container* it is just
 another `copies` target, so `storage.resolve_container` returns either.
 
-`just-loose` is a built-in `loose` location created with the schema: where copies
+`just-loose` is a built-in `loose` place created with the schema: where copies
 land when no container is named, and where they come from when none is named. It
 can't be renamed or deleted. Other loose locations sit alongside it.
 
-Because names are unique only *within* a kind — and a deck may share a name with
-a location — a bare name can be ambiguous. Lookups refuse rather than guess,
-raising `AmbiguousLocation`; pass `kind` (including `deck`) to resolve it.
+Because names are unique only *within* a type — and a deck may share a name with
+a storage place — a bare name can be ambiguous. Lookups refuse rather than guess,
+raising `AmbiguousLocation`; pass `kind` (including `deck`) to resolve it. A
+name that matches nothing raises `NoSuchPlace` carrying close names; the CLI
+offers to create a missing *destination*, never a missing source.
 
 **No views.** Availability is computed in Python (D-009) by `collection.show()`
 — `total_owned`, `committed`, `loose` per *gameplay* card — and by

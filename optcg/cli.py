@@ -7,7 +7,7 @@
     optcg collection move OP05-097 2 --to "Binder A"
     optcg collection set-art OP05-097 1 p1 --in "Binder A"
     optcg collection show OP05-097
-    optcg location show "Binder A"
+    optcg storage show "Binder A"
     optcg loan OP05-097 1 "Marco"
     optcg backup export                           # JSON, to move machines
     optcg backup import my_collection.json        # replaces what's here
@@ -33,7 +33,14 @@ from optcg import resolve
 from optcg import storage as store
 from optcg.backup import BackupError
 from optcg.collection import CollectionError, NotThere
-from optcg.db_setup import DB_PATH, DEFAULT_LOOSE_LOCATION, connect, create_schema
+from optcg.db_setup import (
+    DB_PATH,
+    DEFAULT_LOOSE_LOCATION,
+    connect,
+    create_schema,
+    needs_upgrade,
+    upgrade,
+)
 from optcg.known_types import SEED_TYPES, seed_known_types
 from optcg.decks import (
     DeckError,
@@ -314,7 +321,9 @@ def cmd_deck_set_physical(conn: sqlite3.Connection, args) -> int:
 # --------------------------------------------------------------------------
 
 def cmd_collection_add(conn: sqlite3.Connection, args) -> int:
-    to = store.resolve_container(conn, args.to, args.kind)
+    to = destination(conn, args.to, args.kind)
+    if to is None:
+        return 1
     total = coll.add(conn, args.base_card_id, args.quantity, args.art, to)
     art = args.art or "unsorted"
     print(f"{args.base_card_id}: +{args.quantity} {art} into {to.name} - now {total} owned")
@@ -330,7 +339,9 @@ def cmd_collection_remove(conn: sqlite3.Connection, args) -> int:
 
 def cmd_collection_move(conn: sqlite3.Connection, args) -> int:
     frm = store.resolve_container(conn, getattr(args, "from"), args.from_kind)
-    to = store.resolve_container(conn, args.to, args.to_kind)
+    to = destination(conn, args.to, args.to_kind)
+    if to is None:
+        return 1
     now_there = coll.move(conn, args.base_card_id, args.quantity, frm, to, args.art)
     print(f"{args.base_card_id}: {args.quantity} moved {frm.name} -> {to.name} "
           f"({now_there} there now)")
@@ -349,7 +360,9 @@ def cmd_collection_set_art(conn: sqlite3.Connection, args) -> int:
 
 def cmd_loan(conn: sqlite3.Connection, args) -> int:
     frm = store.resolve_container(conn, getattr(args, "from"), args.from_kind)
-    to = store.resolve_container(conn, args.to_whom, "loan")
+    to = destination(conn, args.to_whom, "loan", new_type="loan")
+    if to is None:
+        return 1
     now_there = coll.move(conn, args.base_card_id, args.quantity, frm, to, args.art)
     print(f"{args.base_card_id}: {args.quantity} loaned to {to.name} "
           f"({now_there} out with them). You still own them.")
@@ -458,19 +471,122 @@ def cmd_browse(conn: sqlite3.Connection, args) -> int:
 # storage
 # --------------------------------------------------------------------------
 
-def cmd_location_add(conn: sqlite3.Connection, args) -> int:
-    store.add_location(conn, args.name, args.kind, args.notes)
-    print(f"created {args.kind} {args.name!r}")
+def ask_option(prompt: str, valid: list[str], no_console: str) -> str | None:
+    """Ask until the answer is one of `valid`. None on 'c', or with no console."""
+    while True:
+        try:
+            answer = input(prompt).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            print(f"error: {no_console}", file=sys.stderr)
+            return None
+        if answer in ("c", "cancel", ""):
+            print("cancelled - nothing changed.")
+            return None
+        if answer in valid:
+            return answer
+        print(f"  type {', '.join(valid)}, or c to cancel")
+
+
+def pick_type(conn: sqlite3.Connection) -> str | None:
+    """Ask which storage type a new place is, from the list - or a new one."""
+    types = store.storage_types(conn)
+    print("what type of place is it?")
+    for i, name in enumerate(types, start=1):
+        print(f"  [{i}] {name}")
+    print("  [n] a new type")
+    answer = ask_option(f"pick 1-{len(types)}, n, or c to cancel: ",
+                        [str(i) for i in range(1, len(types) + 1)] + ["n"],
+                        "say which with --type <storage type>")
+    if answer is None:
+        return None
+    if answer != "n":
+        return types[int(answer) - 1]
+    try:
+        name = input("new type name (e.g. deck-box): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return None
+    if not name:
+        print("cancelled - nothing changed.")
+        return None
+    added = store.add_type(conn, name)
+    print(f"added storage type {added!r}")
+    return added
+
+
+def known_type(conn: sqlite3.Connection, typed: str) -> str | None:
+    """`typed` as an existing type - or, if it isn't one, ask (D-040)."""
+    try:
+        return store._require_kind(conn, typed)
+    except store.UnknownType as exc:
+        print(f"{exc.name!r} isn't a storage type.")
+        valid = ["a"]
+        if exc.close:
+            print(f"  [1] use {exc.close[0]!r}")
+            valid.insert(0, "1")
+        print(f"  [a] add {exc.name!r} as a new type")
+        answer = ask_option(f"pick {', '.join(valid)}, or c to cancel: ", valid,
+                            f"{exc.name!r} isn't a storage type - add it with `storage type add`")
+        if answer is None:
+            return None
+        if answer == "1":
+            return exc.close[0]
+        added = store.add_type(conn, exc.name)
+        print(f"added storage type {added!r}")
+        return added
+
+
+def destination(conn: sqlite3.Connection, name: str | None, kind: str | None = None,
+                new_type: str | None = None) -> store.Container | None:
+    """Where copies are going. A place that doesn't exist is offered to be created,
+    after a 'did you mean' if the name is close to one that does (D-040).
+
+    Only destinations get the offer: an empty place to take cards *from* is
+    never what was meant. None means stop; the reason has been printed.
+    """
+    try:
+        return store.resolve_container(conn, name, kind)
+    except store.NoSuchPlace as exc:
+        if kind == store.DECK_KIND:
+            raise  # decks are made by `deck import` / `deck paste`, not here
+        print(f"{exc.name!r} doesn't exist yet.")
+        valid = []
+        for i, c in enumerate(exc.close, start=1):
+            print(f"  [{i}] use {c.kind} {c.name!r}")
+            valid.append(str(i))
+        print(f"  [n] create {exc.name!r}")
+        valid.append("n")
+        answer = ask_option(f"pick {', '.join(valid)}, or c to cancel: ", valid,
+                            f"no place named {exc.name!r} - create it with `storage add`")
+        if answer is None:
+            return None
+        if answer != "n":
+            return exc.close[int(answer) - 1]
+        kind = new_type or (known_type(conn, kind) if kind else pick_type(conn))
+        if kind is None:
+            return None
+        store.add_location(conn, exc.name, kind)
+        print(f"created {kind} {exc.name!r}")
+        return store.resolve_container(conn, exc.name, kind)
+
+
+def cmd_storage_add(conn: sqlite3.Connection, args) -> int:
+    kind = known_type(conn, args.kind) if args.kind else pick_type(conn)
+    if kind is None:
+        return 1
+    store.add_location(conn, args.name, kind, args.notes)
+    print(f"created {kind} {args.name!r}")
     return 0
 
 
-def cmd_location_list(conn: sqlite3.Connection, args) -> int:
-    locations = store.list_locations(conn, args.kind)
-    if not locations:
-        print("no locations yet - create one with `location add`")
+def cmd_storage_list(conn: sqlite3.Connection, args) -> int:
+    places = store.list_locations(conn, args.kind)
+    if not places:
+        print("no storage places yet - create one with `storage add`")
         return 0
     current = None
-    for loc in locations:
+    for loc in places:
         if loc.kind != current:
             current = loc.kind
             print(f"\n{current.upper()}")
@@ -479,29 +595,29 @@ def cmd_location_list(conn: sqlite3.Connection, args) -> int:
     return 0
 
 
-def cmd_location_rename(conn: sqlite3.Connection, args) -> int:
+def cmd_storage_rename(conn: sqlite3.Connection, args) -> int:
     store.rename_location(conn, args.old, args.new, args.kind)
     print(f"renamed {args.old!r} to {args.new!r}")
     return 0
 
 
-def cmd_location_delete(conn: sqlite3.Connection, args) -> int:
+def cmd_storage_delete(conn: sqlite3.Connection, args) -> int:
     # just-loose is refused by delete_location itself; asking first would be
     # a question whose answer doesn't matter.
     if not args.yes and args.name.strip() != DEFAULT_LOOSE_LOCATION:
         rows = store.contents(conn, args.name, None, args.kind)
-        if rows:  # an empty location loses nothing, so it isn't asked about
+        if rows:  # an empty place loses nothing, so it isn't asked about
             print(f"{args.name!r} holds {sum(r[3] for r in rows)} copies of "
                   f"{len({r[0] for r in rows})} card(s).")
             print("They go to just-loose - you still own them, but not where they were.")
             if not ask_to_continue("delete it?"):
                 return 1
     moved = store.delete_location(conn, args.name, args.kind)
-    print(f"deleted location {args.name!r}. {moved} copies went back to just-loose.")
+    print(f"deleted {args.name!r}. {moved} copies went back to just-loose.")
     return 0
 
 
-def cmd_location_show(conn: sqlite3.Connection, args) -> int:
+def cmd_storage_show(conn: sqlite3.Connection, args) -> int:
     rows = store.contents(conn, args.name, args.limit, args.kind)
     container = store.resolve_container(conn, args.name, args.kind)
     if not rows:
@@ -511,6 +627,19 @@ def cmd_location_show(conn: sqlite3.Connection, args) -> int:
         art = card_image_id or "(unsorted)"
         print(f"  {base_card_id:<14} {art:<34} {quantity:>3}  {name}")
     print(f"\n  {sum(r[3] for r in rows)} copies, {len({r[0] for r in rows})} card(s)")
+    return 0
+
+
+def cmd_storage_type_add(conn: sqlite3.Connection, args) -> int:
+    added = store.add_type(conn, args.name)
+    print(f"added storage type {added!r} - e.g. storage add \"My {added}\" --type {added}")
+    return 0
+
+
+def cmd_storage_type_list(conn: sqlite3.Connection, args) -> int:
+    for t in store.type_summaries(conn):
+        note = "  (built in)" if t.builtin else ""
+        print(f"  {t.name:<16} {t.places:>3} place(s){note}")
     return 0
 
 
@@ -547,26 +676,26 @@ def cmd_backup_export(conn: sqlite3.Connection, args) -> int:
     path = backup.write_export(conn, args.path)
     counts = backup.current_counts(conn)
     print(f"exported to {path}")
-    print(f"  {counts.decks} deck(s), {counts.locations} location(s), {counts.copies} copies")
+    print(f"  {counts.decks} deck(s), {counts.locations} storage place(s), {counts.copies} copies")
     return 0
 
 
 def cmd_backup_import(conn: sqlite3.Connection, args) -> int:
     plan = backup.read_export(args.path)
     when = f", exported {plan.exported_at}" if plan.exported_at else ""
-    print(f"{args.path}: {len(plan.decks)} deck(s), {plan.location_count} location(s), "
+    print(f"{args.path}: {len(plan.decks)} deck(s), {plan.location_count} storage place(s), "
           f"{plan.copy_total} copies{when}")
 
     if not args.yes and not args.dry_run:
         now = backup.current_counts(conn)
         print(f"This REPLACES what is here now: {now.decks} deck(s), {now.locations} "
-              f"location(s), {now.copies} copies.")
+              f"storage place(s), {now.copies} copies.")
         print("A snapshot is taken first, so it can be undone.")
         if not ask_to_continue("replace?"):
             return 1
 
     result = backup.import_collection(conn, plan)
-    print(f"imported {result.decks} deck(s), {plan.location_count} location(s), "
+    print(f"imported {result.decks} deck(s), {plan.location_count} storage place(s), "
           f"{result.copies} copies")
     warn(result.warnings)
     return 0
@@ -725,16 +854,16 @@ how it fits together
               from; `find <name>` just lists them.
   art        which printing a copy is: 'base', or a variant like p1. Optional -
               copies start unsorted, and you can say which art later.
-  container   where copies physically are: a deck, or a location you create
-              (storage box, binder, loan). Cards with nowhere named go to
-              'just-loose'.
+  place       where copies physically are: a deck, or a storage place you
+              create (binder, booster-box, bulk, loan...). Cards with nowhere
+              named go to 'just-loose'.
 
 getting started
   deck import decklists\\Reiju_deck.txt --name "Reiju"
       a sleeved deck - its cards join your collection, sitting in the deck
   collection add OP06-060 2
       loose cards you own
-  location add "Binder A" --kind binder
+  storage add "Binder A" --type binder
   collection move OP06-060 2 --to "Binder A"
   collection show OP06-060
       how many you own, which arts, and where they are
@@ -887,8 +1016,8 @@ def build_parser() -> argparse.ArgumentParser:
         "collection list",
     )
 
-    container_help = f"one of: {', '.join(store.CONTAINER_KINDS)}"
-    kind_note = "only needed when two containers share a name"
+    container_help = "the place's storage type (binder, bulk, ...) or 'deck'"
+    kind_note = "only needed when two places share a name"
     art_help = "printing: a full id (OP06-042_p1), a variant (p1), or 'base'"
 
     p = _command(
@@ -901,8 +1030,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("base_card_id", help=ID_HELP)
     p.add_argument("quantity", type=int)
     p.add_argument("--art", default=None, help=art_help + "; leave out if you haven't sorted them")
-    p.add_argument("--to", default=None, help="container (default: just-loose)")
-    p.add_argument("--kind", choices=store.CONTAINER_KINDS, default=None,
+    p.add_argument("--to", default=None,
+                   help="where they go (default: just-loose) - offered to create it if new")
+    p.add_argument("--type", dest="kind", metavar="<type>", default=None,
                    help=f"{container_help} - {kind_note}")
     p.set_defaults(func=cmd_collection_add)
 
@@ -915,7 +1045,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("quantity", type=int)
     p.add_argument("--art", default=None, help=art_help)
     p.add_argument("--from", default=None, help="container (default: just-loose)")
-    p.add_argument("--kind", choices=store.CONTAINER_KINDS, default=None,
+    p.add_argument("--type", dest="kind", metavar="<type>", default=None,
                    help=f"{container_help} - {kind_note}")
     p.set_defaults(func=cmd_collection_remove)
 
@@ -930,11 +1060,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("base_card_id", help=ID_HELP)
     p.add_argument("quantity", type=int)
     p.add_argument("--from", default=None, help="source (default: just-loose)")
-    p.add_argument("--to", required=True, help="destination location or deck")
+    p.add_argument("--to", required=True,
+                   help="a storage place or deck - offered to create it if new")
     p.add_argument("--art", default=None, help=art_help)
-    p.add_argument("--from-kind", choices=store.CONTAINER_KINDS, default=None,
+    p.add_argument("--from-type", dest="from_kind", metavar="<type>", default=None,
                    help=f"{container_help} - {kind_note}")
-    p.add_argument("--to-kind", choices=store.CONTAINER_KINDS, default=None,
+    p.add_argument("--to-type", dest="to_kind", metavar="<type>", default=None,
                    help=f"{container_help} - {kind_note}")
     p.set_defaults(func=cmd_collection_move)
 
@@ -954,7 +1085,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="container holding them (default: just-loose)")
     p.add_argument("--from-art", default=None,
                    help="fix copies already recorded as this art")
-    p.add_argument("--kind", choices=store.CONTAINER_KINDS, default=None,
+    p.add_argument("--type", dest="kind", metavar="<type>", default=None,
                    help=f"{container_help} - {kind_note}")
     p.set_defaults(func=cmd_collection_set_art)
 
@@ -1007,91 +1138,114 @@ def build_parser() -> argparse.ArgumentParser:
         card_filters(p, 50, "most rows to show (default: 50)")
         p.set_defaults(func=cmd_browse)
 
-    # ---- location -------------------------------------------------------
-    loc = _group(
-        sub, "location", "where cards are stored: boxes, binders, loans",
-        "Locations are places your copies sit outside a deck. Each has a kind:\n"
-        "storage, binder, loose or loan. 'just-loose' always exists.",
-        'location add "Binder A" --kind binder',
-        "location list",
-        'location show "Binder A"',
+    # ---- storage --------------------------------------------------------
+    stor = _group(
+        sub, "storage", "where your cards are kept: binders, boxes, bulk, loans",
+        "Storage places are where your copies sit outside a deck. Each has a type -\n"
+        "binder, booster-box, bulk, loose, loan, or one you add. 'just-loose' always\n"
+        "exists: it's where cards go when you name no place.",
+        'storage add "Binder A" --type binder',
+        "storage list",
+        'storage show "Binder A"',
+        "storage type add deck-box",
     )
 
-    # A bare name can match more than one kind, so every command that resolves
-    # a location takes --kind to disambiguate.
-    kind_help = f"one of: {', '.join(store.LOCATION_KINDS)}"
+    type_metavar = "<storage type>"
+    type_help = "binder, booster-box, bulk, loose, loan, or one you added (`storage type list`)"
 
     p = _command(
-        loc, "add", "create a location",
-        'location add "Binder A" --kind binder',
-        'location add "OP06 Box" --kind storage --notes "bulk"',
-        'location add "Marco" --kind loan',
+        stor, "add", "create a storage place",
+        'storage add "Binder A" --type binder',
+        'storage add "OP06 Box" --type booster-box --notes "Egghead pulls"',
+        'storage add "Marco" --type loan',
+        'storage add "Shelf 2"',
+        description="Create a place to keep cards. Leave out --type and you are asked which\n"
+                    "type it is. A type that doesn't exist yet can be added on the spot.",
     )
     p.add_argument("name", help=NAME_HELP)
-    p.add_argument("--kind", choices=store.LOCATION_KINDS, default="storage",
-                   help=f"{kind_help} (default: storage)")
+    p.add_argument("--type", dest="kind", metavar=type_metavar, default=None, help=type_help)
     p.add_argument("--notes", help="anything you want to remember about it")
-    p.set_defaults(func=cmd_location_add)
+    p.set_defaults(func=cmd_storage_add)
 
     p = _command(
-        loc, "list", "list locations, grouped by kind",
-        "location list",
-        "location list --kind binder",
+        stor, "list", "every storage place, grouped by type",
+        "storage list",
+        "storage list --type binder",
     )
-    p.add_argument("--kind", choices=store.LOCATION_KINDS, default=None, help=f"only this kind: {kind_help}")
-    p.set_defaults(func=cmd_location_list)
+    p.add_argument("--type", dest="kind", metavar=type_metavar, default=None,
+                   help="only places of this type")
+    p.set_defaults(func=cmd_storage_list)
 
     p = _command(
-        loc, "rename", "rename a location",
-        'location rename "OP06 Box" "Germa Box"',
+        stor, "show", "what's inside a storage place or deck",
+        'storage show "Binder A"',
+        'storage show "Reiju"',
+        "storage show",
+    )
+    p.add_argument("name", nargs="?", default=None, help="default: just-loose")
+    p.add_argument("--type", dest="kind", metavar="<type>", default=None,
+                   help=f"{container_help} - {kind_note}")
+    p.add_argument("--limit", type=int, default=None, help="most rows to show")
+    p.set_defaults(func=cmd_storage_show)
+
+    p = _command(
+        stor, "rename", "rename a storage place",
+        'storage rename "OP06 Box" "Germa Box"',
     )
     p.add_argument("old")
     p.add_argument("new")
-    p.add_argument("--kind", choices=store.LOCATION_KINDS, default=None,
-                   help=f"{kind_help} - {kind_note}")
-    p.set_defaults(func=cmd_location_rename)
+    p.add_argument("--type", dest="kind", metavar=type_metavar, default=None,
+                   help=f"its type - {kind_note}")
+    p.set_defaults(func=cmd_storage_rename)
 
     p = _command(
-        loc, "delete", "delete a location - its copies go back to just-loose",
-        'location delete "OP06 Box"',
-        'location delete "OP06 Box" --yes',
-        description="Delete a location. Its copies move to just-loose. If it holds any,\n"
-                    "you are asked first; the database is snapshotted either way.",
+        stor, "delete", "delete a storage place - its copies go back to just-loose",
+        'storage delete "OP06 Box"',
+        'storage delete "OP06 Box" --yes',
+        description="Delete a storage place. Its copies move to just-loose. If it holds\n"
+                    "any, you are asked first; the database is snapshotted either way.",
     )
     p.add_argument("name")
-    p.add_argument("--kind", choices=store.LOCATION_KINDS, default=None,
-                   help=f"{kind_help} - {kind_note}")
+    p.add_argument("--type", dest="kind", metavar=type_metavar, default=None,
+                   help=f"its type - {kind_note}")
     p.add_argument("--yes", action="store_true", help="don't ask for confirmation")
-    p.set_defaults(func=cmd_location_delete)
+    p.set_defaults(func=cmd_storage_delete)
 
-    p = _command(
-        loc, "show", "what's inside a location or deck",
-        'location show "Binder A"',
-        'location show "Reiju"',
-        "location show",
+    types = _group(
+        stor, "type", "the types a storage place can be",
+        "A place's type says what it is: binder, booster-box, bulk... Add your own.\n"
+        "'loose' and 'loan' are built in - the app depends on them.",
+        "storage type list",
+        "storage type add deck-box",
     )
-    p.add_argument("name", nargs="?", default=None, help="default: just-loose")
-    p.add_argument("--kind", choices=store.CONTAINER_KINDS, default=None,
-                   help=f"one of: {', '.join(store.CONTAINER_KINDS)}")
-    p.add_argument("--limit", type=int, default=None, help="most rows to show")
-    p.set_defaults(func=cmd_location_show)
+    p = _command(types, "list", "every storage type, and how many places use it",
+                 "storage type list")
+    p.set_defaults(func=cmd_storage_type_list)
+    p = _command(
+        types, "add", "add a storage type",
+        "storage type add deck-box",
+        'storage type add "display case"',
+        description="Add a storage type. Spaces become dashes ('display case' ->\n"
+                    "'display-case'), so it can follow --type without quotes.",
+    )
+    p.add_argument("name", help="e.g. deck-box")
+    p.set_defaults(func=cmd_storage_type_add)
 
     # ---- loans ----------------------------------------------------------
     p = _command(
         sub, "loan", "lend copies to someone - you still own them",
-        'location add "Marco" --kind loan',
         'loan OP06-042 1 "Marco"',
         'collection move OP06-042 1 --from "Marco" --to just-loose',
         description="Lend copies to someone. They stay in your collection, located with\n"
-                    "that person. Create the person first as a location of kind 'loan';\n"
-                    "when the cards come back, move them out again.",
+                    "that person - a storage place of type 'loan', offered to be created\n"
+                    "if they aren't one yet. When the cards come back, move them out again.",
     )
     p.add_argument("base_card_id", help=ID_HELP)
     p.add_argument("quantity", type=int)
-    p.add_argument("to_whom", help="a location of kind 'loan'")
+    p.add_argument("to_whom", help="who has them: a storage place of type 'loan'")
     p.add_argument("--art", default=None, help="which printing is going out")
     p.add_argument("--from", default=None, help="source (default: just-loose)")
-    p.add_argument("--from-kind", choices=store.CONTAINER_KINDS, default=None,
+    p.add_argument("--from-type", dest="from_kind", metavar="<type>", default=None,
                    help=f"{container_help} - {kind_note}")
     p.set_defaults(func=cmd_loan)
 
@@ -1099,7 +1253,7 @@ def build_parser() -> argparse.ArgumentParser:
     bak = _group(
         sub, "backup", "snapshots for undo, export/import to move machines",
         "Two kinds of backup. A snapshot is a full copy of the database, kept in\n"
-        "data/backups/ - deleting a deck or location, replacing a deck, importing\n"
+        "data/backups/ - deleting a deck or storage place, replacing a deck, importing\n"
         f"and --reset all take one first (the newest {backup.KEEP_AUTO_SNAPSHOTS} are kept). "
         "An export is a\n"
         "JSON file of your decks, locations and copies only: it survives code\n"
@@ -1254,6 +1408,15 @@ def not_ready(conn: sqlite3.Connection, args) -> str | None:
 def run_command(args) -> int:
     conn = connect(args.db)
     try:
+        if needs_upgrade(conn):
+            # A database from an older version: snapshot, then bring it up to date.
+            from optcg.backup import auto_snapshot
+
+            saved = auto_snapshot(conn, "before-upgrade")
+            for change in upgrade(conn):
+                print(f"database upgraded: {change}")
+            if saved:
+                print(f"  (a snapshot from before is in {saved})")
         problem = not_ready(conn, args)
         if problem:
             print(f"error: {problem}", file=sys.stderr)

@@ -10,10 +10,9 @@ import sqlite3
 import unittest
 
 from optcg.collection import add, total_owned
-from optcg.db_setup import DEFAULT_LOOSE_LOCATION, create_schema
+from optcg.db_setup import BUILTIN_STORAGE_TYPES, STARTER_STORAGE_TYPES, DEFAULT_LOOSE_LOCATION, create_schema
 from optcg.storage import (
     AmbiguousLocation,
-    LOCATION_KINDS,
     StorageError,
     add_location,
     contents,
@@ -93,9 +92,9 @@ class BuiltInLooseTests(Base):
 
 class AddLocationTests(Base):
     def test_every_kind(self):
-        for i, kind in enumerate(LOCATION_KINDS):
+        for i, kind in enumerate(BUILTIN_STORAGE_TYPES + STARTER_STORAGE_TYPES):
             add_location(self.conn, f"L{i}", kind)
-        self.assertEqual(len(list_locations(self.conn)), len(LOCATION_KINDS) + 1)
+        self.assertEqual(len(list_locations(self.conn)), len(BUILTIN_STORAGE_TYPES + STARTER_STORAGE_TYPES) + 1)
 
     def test_unknown_kind_is_refused(self):
         with self.assertRaises(StorageError):
@@ -103,10 +102,10 @@ class AddLocationTests(Base):
 
     def test_empty_name_is_refused(self):
         with self.assertRaises(StorageError):
-            add_location(self.conn, "   ")
+            add_location(self.conn, "   ", "binder")
 
     def test_names_are_unique_per_kind_not_globally(self):
-        add_location(self.conn, "Box 1", "storage")
+        add_location(self.conn, "Box 1", "booster-box")
         add_location(self.conn, "Box 1", "binder")     # fine - different kind
         with self.assertRaises(StorageError):
             add_location(self.conn, "Box 1", "binder")
@@ -118,11 +117,11 @@ class ResolveContainerTests(Base):
         self.assertEqual(resolve_container(self.conn, "Binder A").kind, "binder")
 
     def test_ambiguous_across_kinds_refuses_and_kind_resolves_it(self):
-        add_location(self.conn, "Box 1", "storage")
+        add_location(self.conn, "Box 1", "booster-box")
         add_location(self.conn, "Box 1", "binder")
         with self.assertRaises(AmbiguousLocation) as ctx:
             resolve_container(self.conn, "Box 1")
-        self.assertEqual(sorted(ctx.exception.kinds), ["binder", "storage"])
+        self.assertEqual(sorted(ctx.exception.kinds), ["binder", "booster-box"])
         self.assertEqual(resolve_container(self.conn, "Box 1", "binder").kind, "binder")
 
     def test_a_deck_resolves_as_a_container(self):
@@ -173,7 +172,7 @@ class ListLocationsTests(Base):
         self.assertEqual(summary.total_cards, 4)      # four copies
 
     def test_empty_location_counts_zero(self):
-        add_location(self.conn, "Empty", "storage")
+        add_location(self.conn, "Empty", "booster-box")
         summary = next(l for l in list_locations(self.conn) if l.name == "Empty")
         self.assertEqual((summary.distinct_cards, summary.total_cards), (0, 0))
 
@@ -207,7 +206,7 @@ class RenameAndDeleteTests(Base):
         )
 
     def test_delete_an_empty_location(self):
-        add_location(self.conn, "Empty", "storage")
+        add_location(self.conn, "Empty", "booster-box")
         self.assertEqual(delete_location(self.conn, "Empty"), 0)
 
     def test_delete_missing_location(self):
@@ -237,7 +236,7 @@ class ContentsTests(Base):
         self.assertEqual(contents(self.conn, "Law"), [("OP05-097", None, "Luffy", 2)])
 
     def test_empty_container(self):
-        add_location(self.conn, "Empty", "storage")
+        add_location(self.conn, "Empty", "booster-box")
         self.assertEqual(contents(self.conn, "Empty"), [])
 
     def test_limit(self):

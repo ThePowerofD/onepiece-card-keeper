@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from optcg.db_setup import DEFAULT_LOOSE_LOCATION
-from optcg.storage import LOCATION_KINDS
+from optcg.storage import DECK_KIND, normalize_type
 
 EXPORT_FORMAT = "optcg-collection"
 EXPORT_VERSION = 1
@@ -228,6 +228,9 @@ def export_collection(conn: sqlite3.Connection) -> dict:
         "format": EXPORT_FORMAT,
         "version": EXPORT_VERSION,
         "exported_at": datetime.now().isoformat(timespec="seconds"),
+        # Optional on import: exports from before D-040 don't have it.
+        "storage_types": [name for (name,) in conn.execute(
+            "SELECT name FROM storage_types WHERE NOT builtin ORDER BY name")],
         "locations": locations,
         "decks": decks,
     }
@@ -283,6 +286,7 @@ class ExportPlan(NamedTuple):
     exported_at: str | None
     locations: list[LocationEntry]
     decks: list[DeckEntry]
+    storage_types: tuple[str, ...] = ()
 
     @property
     def location_count(self) -> int:
@@ -384,9 +388,10 @@ def parse_export(data) -> ExportPlan:
         at = f"locations[{i}]"
         item = _object(item, at)
         name = _text(item.get("name"), f"{at}.name")
-        kind = item.get("kind")
-        if kind not in LOCATION_KINDS:
-            raise BackupError(f"{at}.kind: {kind!r} is not one of {', '.join(LOCATION_KINDS)}")
+        # Any type name is fine: custom types travel with the data (D-040).
+        kind = normalize_type(_text(item.get("kind"), f"{at}.kind"))
+        if kind == DECK_KIND:
+            raise BackupError(f"{at}.kind: 'deck' is not a storage type")
         if (name, kind) in seen_locations:
             raise BackupError(f"{at}: {kind} {name!r} appears twice")
         seen_locations.add((name, kind))
@@ -424,8 +429,16 @@ def parse_export(data) -> ExportPlan:
             _parse_copies(item.get("copies"), f"{at}.copies"),
         ))
 
+    types = []
+    for i, name in enumerate(_list(data.get("storage_types", []), "storage_types")):
+        clean = normalize_type(_text(name, f"storage_types[{i}]"))
+        if clean == DECK_KIND:
+            raise BackupError(f"storage_types[{i}]: 'deck' is not a storage type")
+        types.append(clean)
+
     exported_at = data.get("exported_at")
-    return ExportPlan(exported_at if isinstance(exported_at, str) else None, locations, decks)
+    return ExportPlan(exported_at if isinstance(exported_at, str) else None, locations, decks,
+                      tuple(types))
 
 
 def read_export(path: str | Path) -> ExportPlan:
@@ -492,6 +505,12 @@ def import_collection(conn: sqlite3.Connection, plan: ExportPlan) -> ImportSumma
         conn.execute("DELETE FROM deck_cards")
         conn.execute("DELETE FROM decks")
         conn.execute("DELETE FROM storage_locations")
+        # Types are added, never removed: a type the owner made here survives
+        # an import, and every type the file uses exists before it's needed.
+        conn.executemany(
+            "INSERT OR IGNORE INTO storage_types (name) VALUES (?)",
+            [(t,) for t in {*plan.storage_types, *(loc.kind for loc in plan.locations)}],
+        )
 
         def place(merged, location_id, deck_id):
             nonlocal copy_total

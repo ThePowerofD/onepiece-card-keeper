@@ -72,7 +72,8 @@ you named are in your deck, `optcg setup` when the database isn't set up yet.
   several gives you a numbered list to pick from (or `c` to cancel).
 - **Art** — which printing you have (`base`, `p1`, ...). Optional: copies start
   unsorted and you can say later.
-- **Container** — where a card physically is: a deck, or a location you create.
+- **Place** — where a card physically is: a deck, or a storage place you create
+  (a binder, a booster box, bulk...).
   Cards with nowhere named go to `just-loose`.
 
 **A handful of commands cover almost everything:**
@@ -85,7 +86,7 @@ collection show OP06-060                   how many, which arts, where they are
 find ichiji                                every card with that in its name, and what you own
 collection list                            everything you own
 browse --set OP17                          every card in the game, owned or not
-location add "Binder A" --kind binder      a place to keep cards
+storage add "Binder A" --type binder      a place to keep cards
 collection move OP06-060 2 --to "Binder A"
 ```
 
@@ -133,7 +134,7 @@ as UI instead of terminal tables. See **D-024** for the reasoning.
 | Sets covered | OP01–OP17, EB01–EB04, ST01–ST36, PRB01–02, promos |
 | Bad rows in logs | none |
 | Owned so far | 51 copies, 1 deck |
-| Tests | 563 passing |
+| Tests | 582 passing |
 
 **Known limitation:** OptcgAPI lags the real game. It caught up to **OP17** by
 2026-10-29 (synced that day: 158 new OP17 printings, ST31–ST36, and three new
@@ -175,7 +176,7 @@ python -m pytest tests/ --cov=optcg --cov-report=term-missing   # coverage (99%)
   Stale printings:    0
 ```
 
-...and 563 passing tests. Anything else means something changed upstream —
+...and 582 passing tests. Anything else means something changed upstream —
 `Unknown sub_types` above 0 usually means a new set introduced a card type;
 add it to `SEED_TYPES` in `optcg/known_types.py` and re-sync. `Stale printings`
 above 0 means the API stopped sending some rows; they are kept, and if you own
@@ -186,7 +187,7 @@ Add `--use-cache` to `optcg sync` to reuse the saved JSON in
 cache files to force a fresh fetch.
 
 `data/optcg.db` is gitignored. The **card catalog** in it is regenerable by the
-three commands above; **your decks, locations and copies are not** — they exist
+three commands above; **your decks, storage places and copies are not** — they exist
 nowhere else. See [Backups](#backups).
 
 ---
@@ -226,7 +227,7 @@ optcg collection show cosette                # a name works anywhere an id does
 optcg collection add OP05-097 4                  # unsorted, into just-loose
 optcg collection add OP05-097 2 --art p1 --to "Mewtwo Binder"
 optcg collection move OP05-097 2 --to "Mewtwo Binder"
-optcg collection move OP05-097 4 --from "Red Luffy" --from-kind deck --to just-loose
+optcg collection move OP05-097 4 --from "Red Luffy" --from-type deck --to just-loose
 optcg collection set-art OP05-097 1 p1 --in "Mewtwo Binder"
 optcg collection remove OP05-097 1               # sold or traded away
 optcg collection show OP05-097       # arts, containers, totals
@@ -238,15 +239,18 @@ optcg browse --set OP17
 optcg browse --color Purple --category Leader
 
 # Storage — where the copies physically are.
-# Every location has a --kind: storage | binder | loose | loan
-optcg location add "OP13 Box" --kind storage
-optcg location add "Mewtwo Binder" --kind binder --notes "alt arts"
-optcg location add "Friend 1" --kind loan
-optcg location list                  # grouped by kind
-optcg location show "Mewtwo Binder"  # what's in it, art by art
-optcg location show                  # defaults to just-loose
-optcg location rename "OP13 Box" "OP13 Storage"
-optcg location delete "OP13 Storage" # asks first if it holds copies
+# Every place has a type: binder, booster-box, bulk, loose, loan - or your own
+optcg storage add "OP13 Box" --type booster-box
+optcg storage add "Mewtwo Binder" --type binder --notes "alt arts"
+optcg storage add "Friend 1" --type loan
+optcg storage add "Shelf 2"                 # no --type: you're asked which
+optcg storage list                          # grouped by type
+optcg storage show "Mewtwo Binder"          # what's in it, art by art
+optcg storage show                          # defaults to just-loose
+optcg storage rename "OP13 Box" "OP13 Storage"
+optcg storage delete "OP13 Storage"         # asks first if it holds copies
+optcg storage type add deck-box             # a new type
+optcg storage type list
 
 # Loans — the card is still yours, it's just somewhere else
 optcg loan OP05-097 1 "Friend 1" --art p1
@@ -258,17 +262,21 @@ optcg backup snapshot --label before-sorting
 optcg backup list
 ```
 
-**Names are unique per kind, not globally** — a box and a binder can both be
+**Moving cards to a place that doesn't exist yet** offers to create it — after a
+"did you mean" if the name is close to one you have, so a typo never creates a
+junk binder. The same goes for a storage type you haven't added yet.
+
+```
+$ collection move OP05-097 2 --to "Bindr A"
+'Bindr A' doesn't exist yet.
+  [1] use binder 'Binder A'
+  [n] create 'Bindr A'
+```
+
+**Names are unique per type, not globally** — a box and a binder can both be
 "Box 1". When a bare name is ambiguous the command refuses rather than guessing;
-add `--kind` to say which you meant.
-
-```
-$ collection move OP05-097 2 --to "Box 1"
-error: 'Box 1' exists as binder and as storage - say which with --kind
-```
-
-A deck can share a name with a location too, so `--kind deck` is available
-wherever a container is named.
+add `--type` to say which you meant. A deck can share a name with a storage place
+too, so `--type deck` works wherever a place is named.
 
 Every command takes `--db PATH` to work against a different database file.
 
@@ -296,11 +304,11 @@ Two kinds, for two jobs (D-032):
 
 - **Snapshots — undo on this machine.** A full copy of the database in
   `data/backups/`. Taken **automatically** before `deck delete`,
-  `location delete`, a deck import that replaces, `backup import` and
+  `storage delete`, a deck import that replaces, `backup import` and
   `db_setup --reset`; the newest 10 automatic ones are kept. Ones you make with
   `backup snapshot` are never deleted. **To undo**, close the app and copy the
   snapshot over `data/optcg.db`.
-- **Export — moving to another machine.** A JSON file of your decks, locations
+- **Export — moving to another machine.** A JSON file of your decks, storage places
   and copies only. It names cards by their printed ids, so it still loads after
   code updates. On the new machine: clone, set up, **sync first**, then
   `backup import my_collection.json`. Import **replaces** everything there — it
@@ -308,7 +316,7 @@ Two kinds, for two jobs (D-032):
 
 `data/backups/` is gitignored: it's your data, not code.
 
-**Before it happens** (D-034): `deck delete`, and `location delete` on a location
+**Before it happens** (D-034): `deck delete`, and `storage delete` on a place
 that holds copies, say what will move and wait for `y`; `--yes` skips that.
 `deck import`, `deck paste` and `backup import` take `--dry-run`, which runs the
 command against a throwaway copy and prints exactly what it would do. Use it on
@@ -322,7 +330,7 @@ or an `add` puts copies in.
 
 ```bash
 optcg deck import mydeck.txt --name "Red Luffy" --physical
-optcg location add "Binder A" --kind binder
+optcg storage add "Binder A" --type binder
 optcg collection add OP05-097 2                  # into just-loose
 optcg collection move OP05-097 2 --to "Binder A"
 optcg collection show OP05-097   # where they are, and which arts
@@ -343,11 +351,11 @@ optcg/
   deck_parser.py  Limitless and deckbuilder-export decklists — pure, never raises
   resolve.py      what you typed → card ids: exact ids, name search, typo fixes
   collection.py   what you own, with the availability guard
-  storage.py      storage locations and placements
+  storage.py      storage places and their types
   decks.py        deck import and management
   backup.py       snapshots, and JSON export/import of your own data
   cli.py          argparse entry point over all of the above
-tests/            563 tests
+tests/            582 tests
 data/             optcg.db, cache/ and backups/ (all gitignored)
 ```
 

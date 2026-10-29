@@ -33,7 +33,7 @@ never met a real card.
 
 ```bash
 optcg deck import <file.txt> --name "<deck>" --physical
-optcg location add "Binder A" --notes "red decks"
+optcg storage add "Binder A" --type binder --notes "red decks"
 ```
 
 Import every deck that's currently sleeved. Each one credits the collection as a

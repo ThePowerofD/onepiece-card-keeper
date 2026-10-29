@@ -303,7 +303,7 @@ class ImportTests(TempDirCase):
 
     def test_replaces_rather_than_merges(self):
         import_decklist(self.other, DECKLIST, "Old deck", True)
-        store.add_location(self.other, "Old box", "storage")
+        store.add_location(self.other, "Old box", "booster-box")
         self.build_collection()
 
         import_collection(self.other, parse_export(export_collection(self.conn)))
@@ -363,6 +363,16 @@ class ImportTests(TempDirCase):
         self.assertEqual(coll.total_owned(self.other, "OP17-001"), 4)
         self.assertIn("OP17-001", summary.warnings[0])
 
+    def test_custom_storage_types_travel_with_the_export(self):
+        store.add_type(self.conn, "deck-box")       # used by a place
+        store.add_type(self.conn, "display-case")   # not used yet - must still move
+        store.add_location(self.conn, "Red Box", "deck-box")
+        import_collection(self.other, parse_export(export_collection(self.conn)))
+        types = {name for (name,) in self.other.execute("SELECT name FROM storage_types")}
+        self.assertTrue({"deck-box", "display-case"} <= types)
+        self.assertIn(("Red Box", "deck-box"), self.other.execute(
+            "SELECT name, kind FROM storage_locations").fetchall())
+
     def test_refused_without_a_card_catalog(self):
         bare = new_db(self.dir / "bare", catalog=False)
         try:
@@ -418,7 +428,7 @@ class ParseExportTests(unittest.TestCase):
     def test_refuses_an_unknown_kind(self):
         data = self.base()
         data["locations"][0]["kind"] = "deck"
-        self.assertRefused(data, "not one of")
+        self.assertRefused(data, "not a storage type")
 
     def test_refuses_a_location_listed_twice(self):
         data = self.base()
@@ -480,7 +490,7 @@ class BackupCliTests(TempDirCase):
     def test_export_reports_what_it_wrote(self):
         code, out, _ = self.run_cli("backup", "export", str(self.export))
         self.assertEqual(code, 0)
-        self.assertIn("1 deck(s), 1 location(s), 31 copies", out)
+        self.assertIn("1 deck(s), 1 storage place(s), 31 copies", out)
         self.assertTrue(self.export.exists())
 
     def test_import_asks_first_and_can_be_cancelled(self):

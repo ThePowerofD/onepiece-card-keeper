@@ -232,7 +232,7 @@ class CollectionCommandTests(CliTestCase):
         self.assertIn("now 3 owned", out)
         self.assertIn("just-loose", out)
 
-        self.run_cli("location", "add", "Binder A", "--kind", "binder")
+        self.run_cli("storage", "add", "Binder A", "--type", "binder")
         code, out, _ = self.run_cli("collection", "move", "OP05-001", "2", "--to", "Binder A")
         self.assertEqual(code, 0)
         self.assertIn("just-loose -> Binder A", out)
@@ -344,69 +344,71 @@ class CollectionCommandTests(CliTestCase):
 
 class StorageCommandTests(CliTestCase):
     def test_location_lifecycle(self):
-        code, out, _ = self.run_cli("location", "add", "Binder A", "--notes", "reds")
+        code, out, _ = self.run_cli("storage", "add", "Binder A", "--type", "binder", "--notes", "reds")
         self.assertEqual(code, 0)
 
-        _, out, _ = self.run_cli("location", "list")
+        _, out, _ = self.run_cli("storage", "list")
         self.assertIn("Binder A", out)
         self.assertIn("reds", out)
 
-        _, out, _ = self.run_cli("location", "rename", "Binder A", "Binder One")
+        _, out, _ = self.run_cli("storage", "rename", "Binder A", "Binder One")
         self.assertIn("renamed", out)
 
-        _, out, _ = self.run_cli("location", "delete", "Binder One")
+        _, out, _ = self.run_cli("storage", "delete", "Binder One")
         self.assertIn("back to just-loose", out)
 
     def test_location_list_always_has_just_loose(self):
-        code, out, _ = self.run_cli("location", "list")
+        code, out, _ = self.run_cli("storage", "list")
         self.assertEqual(code, 0)
         self.assertIn("just-loose", out)
 
     def test_just_loose_is_protected(self):
-        code, _, err = self.run_cli("location", "delete", "just-loose")
+        code, _, err = self.run_cli("storage", "delete", "just-loose")
         self.assertEqual(code, 1)
         self.assertIn("built in", err)
 
     def test_duplicate_location(self):
-        self.run_cli("location", "add", "Binder A")
-        code, _, err = self.run_cli("location", "add", "Binder A")
+        self.run_cli("storage", "add", "Binder A", "--type", "binder")
+        code, _, err = self.run_cli("storage", "add", "Binder A", "--type", "binder")
         self.assertEqual(code, 1)
         self.assertIn("already exists", err)
 
     def test_location_show(self):
         self.run_cli("collection", "add", "OP05-001", "2")
-        code, out, _ = self.run_cli("location", "show")
+        code, out, _ = self.run_cli("storage", "show")
         self.assertEqual(code, 0)
         self.assertIn("OP05-001", out)
         self.assertIn("(unsorted)", out)
 
     def test_location_show_empty(self):
-        self.run_cli("location", "add", "Binder A")
-        code, out, _ = self.run_cli("location", "show", "Binder A")
+        self.run_cli("storage", "add", "Binder A", "--type", "binder")
+        code, out, _ = self.run_cli("storage", "show", "Binder A")
         self.assertEqual(code, 0)
         self.assertIn("is empty", out)
 
-    def test_moving_into_an_unknown_container(self):
+    def test_moving_into_an_unknown_container_without_a_console(self):
         self.run_cli("collection", "add", "OP05-001", "1")
-        code, _, err = self.run_cli("collection", "move", "OP05-001", "1", "--to", "Nowhere")
+        with mock.patch("builtins.input", side_effect=EOFError):
+            code, out, err = self.run_cli("collection", "move", "OP05-001", "1", "--to", "Nowhere")
         self.assertEqual(code, 1)
-        self.assertIn("no location or deck named", err)
+        self.assertIn("'Nowhere' doesn't exist yet", out)
+        self.assertIn("create it with `storage add`", err)
 
     def test_ambiguous_container_asks_for_a_kind(self):
-        self.run_cli("location", "add", "Box 1", "--kind", "storage")
-        self.run_cli("location", "add", "Box 1", "--kind", "binder")
+        self.run_cli("storage", "add", "Box 1", "--type", "booster-box")
+        self.run_cli("storage", "add", "Box 1", "--type", "binder")
         self.run_cli("collection", "add", "OP05-001", "1")
         code, _, err = self.run_cli("collection", "move", "OP05-001", "1", "--to", "Box 1")
         self.assertEqual(code, 1)
-        self.assertIn("--kind", err)
+        self.assertIn("--type", err)
 
         code, _, _ = self.run_cli("collection", "move", "OP05-001", "1",
-                                  "--to", "Box 1", "--to-kind", "binder")
+                                  "--to", "Box 1", "--to-type", "binder")
         self.assertEqual(code, 0)
 
     def test_loan_keeps_ownership(self):
         self.run_cli("collection", "add", "OP05-001", "2")
-        self.run_cli("location", "add", "Marco", "--kind", "loan")
+        self.run_cli("storage", "add", "Marco", "--type", "loan")
         code, out, _ = self.run_cli("loan", "OP05-001", "1", "Marco")
         self.assertEqual(code, 0)
         self.assertIn("still own them", out)
@@ -419,7 +421,7 @@ class StorageCommandTests(CliTestCase):
         self.run_cli("deck", "import", str(self.decklist), "--name", "Red", "--wishlist")
         self.run_cli("collection", "add", "OP05-001", "1")
         code, out, _ = self.run_cli("collection", "move", "OP05-001", "1",
-                                    "--to", "Red", "--to-kind", "deck")
+                                    "--to", "Red", "--to-type", "deck")
         self.assertEqual(code, 0)
         self.assertIn("-> Red", out)
 
@@ -441,14 +443,14 @@ class CliEdgeTests(CliTestCase):
 
     def test_moving_copies_back_out_of_a_container(self):
         self.run_cli("collection", "add", "OP05-001", "4")
-        self.run_cli("location", "add", "Binder A")
+        self.run_cli("storage", "add", "Binder A", "--type", "binder")
         self.run_cli("collection", "move", "OP05-001", "3", "--to", "Binder A")
         code, out, _ = self.run_cli("collection", "move", "OP05-001", "3",
                                     "--from", "Binder A", "--to", "just-loose")
         self.assertEqual(code, 0)
         self.assertIn("Binder A -> just-loose", out)
 
-        _, out, _ = self.run_cli("location", "show", "Binder A")
+        _, out, _ = self.run_cli("storage", "show", "Binder A")
         self.assertIn("is empty", out)
 
     def test_deck_show_by_id(self):
@@ -539,7 +541,7 @@ class ConfirmTests(CliTestCase):
     def setUp(self):
         super().setUp()
         self.run_cli("deck", "import", str(self.decklist), "--name", "Red")
-        self.run_cli("location", "add", "Binder A", "--kind", "binder")
+        self.run_cli("storage", "add", "Binder A", "--type", "binder")
 
     def deck_count(self) -> int:
         conn = sqlite3.connect(self.db)
@@ -587,30 +589,30 @@ class ConfirmTests(CliTestCase):
 
     def test_empty_location_is_deleted_without_asking(self):
         with mock.patch("builtins.input") as prompt:
-            code, _, _ = self.run_cli("location", "delete", "Binder A")
+            code, _, _ = self.run_cli("storage", "delete", "Binder A")
         self.assertEqual(code, 0)
         prompt.assert_not_called()
 
     def test_location_with_copies_asks(self):
         self.run_cli("collection", "add", "OP05-001", "3", "--to", "Binder A")
         with mock.patch("builtins.input", return_value="n"):
-            code, out, _ = self.run_cli("location", "delete", "Binder A")
+            code, out, _ = self.run_cli("storage", "delete", "Binder A")
         self.assertEqual(code, 1)
         self.assertIn("holds 3 copies of 1 card(s)", out)
-        _, out, _ = self.run_cli("location", "list")
+        _, out, _ = self.run_cli("storage", "list")
         self.assertIn("Binder A", out)
 
     def test_yes_flag_skips_the_question(self):
         self.run_cli("collection", "add", "OP05-001", "3", "--to", "Binder A")
         with mock.patch("builtins.input") as prompt:
-            code, _, _ = self.run_cli("location", "delete", "Binder A", "--yes")
+            code, _, _ = self.run_cli("storage", "delete", "Binder A", "--yes")
         self.assertEqual(code, 0)
         prompt.assert_not_called()
 
     def test_just_loose_is_refused_without_asking(self):
         self.run_cli("collection", "add", "OP05-001", "3")
         with mock.patch("builtins.input") as prompt:
-            code, _, err = self.run_cli("location", "delete", "just-loose")
+            code, _, err = self.run_cli("storage", "delete", "just-loose")
         self.assertEqual(code, 1)
         prompt.assert_not_called()
         self.assertIn("built in", err)
@@ -824,8 +826,8 @@ class CardNameTests(CliTestCase):
         self.assertIn("did you mean 'cosette'?", err)
 
     def test_every_card_command_accepts_a_name(self):
-        self.run_cli("location", "add", "Binder A", "--kind", "binder")
-        self.run_cli("location", "add", "Marco", "--kind", "loan")
+        self.run_cli("storage", "add", "Binder A", "--type", "binder")
+        self.run_cli("storage", "add", "Marco", "--type", "loan")
         for argv in (["collection", "add", "cosette", "4"],
                      ["collection", "move", "cosette", "1", "--to", "Binder A"],
                      ["collection", "set-art", "cosette", "1", "base", "--in", "Binder A"],
@@ -900,7 +902,7 @@ class FriendlyErrorTests(CliTestCase):
         create_schema(conn)
         conn.close()
         with redirect_stdout(io.StringIO()):
-            self.assertEqual(main(["--db", str(empty), "location", "add", "Binder A"]), 0)
+            self.assertEqual(main(["--db", str(empty), "storage", "add", "Binder A", "--type", "binder"]), 0)
 
     def test_copies_elsewhere_names_the_flag_to_add(self):
         self.run_cli("deck", "import", str(self.decklist), "--name", "Red")
@@ -909,13 +911,13 @@ class FriendlyErrorTests(CliTestCase):
         self.assertIn("copies are in: deck 'Red' 4 unsorted", err)
         self.assertIn('add --in "Red"', err)
 
-        self.run_cli("location", "add", "Binder A", "--kind", "binder")
+        self.run_cli("storage", "add", "Binder A", "--type", "binder")
         _, _, err = self.run_cli("collection", "move", "OP05-001", "1", "--to", "Binder A")
         self.assertIn('add --from "Red"', err)
 
     def test_copies_in_several_places_are_listed_without_guessing(self):
         self.run_cli("deck", "import", str(self.decklist), "--name", "Red")
-        self.run_cli("location", "add", "Binder A", "--kind", "binder")
+        self.run_cli("storage", "add", "Binder A", "--type", "binder")
         self.run_cli("collection", "add", "OP05-001", "1", "--to", "Binder A")
         _, _, err = self.run_cli("collection", "remove", "OP05-001", "1")
         self.assertIn("binder 'Binder A'", err)
@@ -974,3 +976,182 @@ class ShowArtHintTests(CliTestCase):
         self.run_cli("collection", "add", "OP05-001", "2", "--art", "base")
         _, out, _ = self.run_cli("collection", "show", "OP05-001")
         self.assertIn("1 other printing(s) exist that you don't own", out)
+
+
+class StorageTypeTests(CliTestCase):
+    """D-040: storage places have a type, from a list the owner adds to."""
+
+    def places(self) -> list[tuple]:
+        conn = sqlite3.connect(self.db)
+        try:
+            return conn.execute("SELECT name, kind FROM storage_locations ORDER BY name").fetchall()
+        finally:
+            conn.close()
+
+    def test_starter_types(self):
+        _, out, _ = self.run_cli("storage", "type", "list")
+        for name in ("binder", "booster-box", "bulk", "loose", "loan"):
+            self.assertIn(name, out)
+        self.assertIn("(built in)", out)
+
+    def test_add_a_type_and_use_it(self):
+        code, out, _ = self.run_cli("storage", "type", "add", "Display Case")
+        self.assertEqual(code, 0)
+        self.assertIn("'display-case'", out)
+        code, _, _ = self.run_cli("storage", "add", "Shelf", "--type", "display-case")
+        self.assertEqual(code, 0)
+        self.assertIn(("Shelf", "display-case"), self.places())
+
+    def test_a_type_name_must_be_one_word(self):
+        code, _, err = self.run_cli("storage", "type", "add", "box!")
+        self.assertEqual(code, 1)
+        self.assertIn("letters, numbers and dashes", err)
+
+    def test_deck_is_not_a_storage_type(self):
+        _, _, err = self.run_cli("storage", "type", "add", "deck")
+        self.assertIn("'deck' is taken", err)
+
+    def test_add_without_a_type_asks_which(self):
+        with mock.patch("builtins.input", return_value="1"):  # binder, first alphabetically
+            code, out, _ = self.run_cli("storage", "add", "Binder A")
+        self.assertEqual(code, 0)
+        self.assertIn("what type of place is it?", out)
+        self.assertIn(("Binder A", "binder"), self.places())
+
+    def test_add_without_a_type_can_make_a_new_one(self):
+        with mock.patch("builtins.input", side_effect=["n", "deck box"]):
+            code, out, _ = self.run_cli("storage", "add", "Red Box")
+        self.assertEqual(code, 0)
+        self.assertIn(("Red Box", "deck-box"), self.places())
+
+    def test_a_mistyped_type_suggests_the_right_one(self):
+        with mock.patch("builtins.input", return_value="1"):
+            code, out, _ = self.run_cli("storage", "add", "Binder A", "--type", "bindr")
+        self.assertEqual(code, 0)
+        self.assertIn("[1] use 'binder'", out)
+        self.assertIn(("Binder A", "binder"), self.places())
+
+    def test_an_unknown_type_can_be_added_on_the_spot(self):
+        with mock.patch("builtins.input", return_value="a"):
+            self.run_cli("storage", "add", "Tin 1", "--type", "tin")
+        self.assertIn(("Tin 1", "tin"), self.places())
+
+    def test_no_console_means_no_guessing(self):
+        with mock.patch("builtins.input", side_effect=EOFError):
+            code, _, err = self.run_cli("storage", "add", "Binder A")
+        self.assertEqual(code, 1)
+        self.assertIn("--type <storage type>", err)
+        self.assertEqual(self.places(), [("just-loose", "loose")])
+
+    def test_moving_to_a_new_place_offers_to_create_it(self):
+        self.run_cli("collection", "add", "OP05-001", "2")
+        with mock.patch("builtins.input", side_effect=["n", "1"]):  # create, as a binder
+            code, out, _ = self.run_cli("collection", "move", "OP05-001", "2", "--to", "Binder Z")
+        self.assertEqual(code, 0)
+        self.assertIn("created binder 'Binder Z'", out)
+        _, out, _ = self.run_cli("storage", "show", "Binder Z")
+        self.assertIn("OP05-001", out)
+
+    def test_a_close_name_is_offered_before_creating(self):
+        self.run_cli("storage", "add", "Binder A", "--type", "binder")
+        self.run_cli("collection", "add", "OP05-001", "2")
+        with mock.patch("builtins.input", return_value="1"):
+            code, out, _ = self.run_cli("collection", "move", "OP05-001", "2", "--to", "Bindr A")
+        self.assertEqual(code, 0)
+        self.assertIn("[1] use binder 'Binder A'", out)
+        self.assertNotIn(("Bindr A", "binder"), self.places())
+
+    def test_cancel_creates_nothing_and_moves_nothing(self):
+        self.run_cli("collection", "add", "OP05-001", "2")
+        with mock.patch("builtins.input", return_value="c"):
+            code, _, _ = self.run_cli("collection", "move", "OP05-001", "2", "--to", "Binder Z")
+        self.assertEqual(code, 1)
+        self.assertEqual(self.places(), [("just-loose", "loose")])
+
+    def test_adding_cards_to_a_new_place_offers_too(self):
+        with mock.patch("builtins.input", side_effect=["n", "3"]):  # create, as bulk
+            code, out, _ = self.run_cli("collection", "add", "OP05-001", "5", "--to", "Bulk 1")
+        self.assertEqual(code, 0)
+        self.assertIn(("Bulk 1", "bulk"), self.places())
+
+    def test_lending_to_someone_new_creates_them_as_a_loan(self):
+        self.run_cli("collection", "add", "OP05-001", "2")
+        with mock.patch("builtins.input", return_value="n"):
+            code, out, _ = self.run_cli("loan", "OP05-001", "1", "Marco")
+        self.assertEqual(code, 0)
+        self.assertIn("created loan 'Marco'", out)
+        self.assertIn(("Marco", "loan"), self.places())
+
+    def test_a_missing_source_is_never_offered_to_be_created(self):
+        """Creating an empty place to take cards out of is never what was meant."""
+        with mock.patch("builtins.input") as prompt:
+            code, _, err = self.run_cli("collection", "remove", "OP05-001", "1", "--from", "Nowhere")
+        self.assertEqual(code, 1)
+        prompt.assert_not_called()
+        self.assertIn("no storage place or deck named 'Nowhere'", err)
+
+    def test_location_is_gone(self):
+        err = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(err), self.assertRaises(SystemExit):
+            main(["--db", str(self.db), "location", "list"])
+        self.assertIn("did you mean 'loan'?", err.getvalue())
+
+
+class UpgradeTests(unittest.TestCase):
+    """A database from before D-040 upgrades itself on first use, losing nothing."""
+
+    OLD_LOCATIONS = """
+        CREATE TABLE storage_locations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'storage'
+                 CHECK(kind IN ('storage', 'binder', 'loose', 'loan')),
+            notes TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(name, kind))"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Path(self.tmp.name) / "old.db"
+        conn = sqlite3.connect(self.db)
+        conn.execute("PRAGMA foreign_keys = ON")
+        create_schema(conn)
+        # Rebuild storage_locations the pre-D-040 way, with a 'storage' place in it.
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute("DROP TABLE storage_locations")
+        conn.execute(self.OLD_LOCATIONS)
+        conn.execute("INSERT INTO storage_locations (name, kind) VALUES ('just-loose', 'loose')")
+        conn.execute("INSERT INTO storage_locations (name, kind) VALUES ('Old Box', 'storage')")
+        conn.execute("DROP TABLE storage_types")
+        conn.execute("INSERT INTO cards (card_image_id, base_card_id, name, category) "
+                     "VALUES ('OP05-001', 'OP05-001', 'Card', 'Character')")
+        conn.execute("INSERT INTO copies (base_card_id, location_id, quantity) VALUES ('OP05-001', 2, 3)")
+        conn.commit()
+        conn.close()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_first_command_upgrades_and_keeps_everything(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = main(["--db", str(self.db), "storage", "list"])
+        self.assertEqual(code, 0)
+        self.assertIn("database upgraded", out.getvalue())
+        self.assertIn("snapshot from before", out.getvalue())
+        self.assertIn("Old Box", out.getvalue())
+        conn = sqlite3.connect(self.db)
+        try:
+            # The old default kind is kept as a type of its own, not reinterpreted.
+            self.assertIn(("storage",), conn.execute("SELECT name FROM storage_types").fetchall())
+            self.assertEqual(conn.execute("SELECT SUM(quantity) FROM copies").fetchone()[0], 3)
+            self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
+        finally:
+            conn.close()
+
+    def test_second_command_does_not_upgrade_again(self):
+        with redirect_stdout(io.StringIO()):
+            main(["--db", str(self.db), "storage", "list"])
+        out = io.StringIO()
+        with redirect_stdout(out):
+            main(["--db", str(self.db), "storage", "list"])
+        self.assertNotIn("database upgraded", out.getvalue())
+
