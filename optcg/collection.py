@@ -25,6 +25,19 @@ class CollectionError(Exception):
     """A requested change was refused. Carries a message fit to print."""
 
 
+class NotThere(CollectionError):
+    """The container named doesn't hold the copies asked for.
+
+    Carries where the card's copies actually are, so a caller can say which
+    container to name instead - the usual cause is forgetting that copies
+    imported with a deck sit in the deck, not in just-loose.
+    """
+
+    def __init__(self, message: str, elsewhere: list["Holding"]):
+        super().__init__(message)
+        self.elsewhere = elsewhere
+
+
 class Holding(NamedTuple):
     """Copies of one card, of one art, in one container."""
     container: str
@@ -153,6 +166,32 @@ def _describe_holdings(
     return ", ".join(f"{qty} {art or 'unsorted'}" for art, qty in rows)
 
 
+def unsorted_copies(conn: sqlite3.Connection, base_card_id: str) -> int:
+    """Copies of this card whose art hasn't been recorded yet, wherever they are."""
+    return conn.execute(
+        "SELECT COALESCE(SUM(quantity), 0) FROM copies "
+        "WHERE base_card_id = ? AND card_image_id IS NULL",
+        (base_card_id,),
+    ).fetchone()[0]
+
+
+def holdings_of(conn: sqlite3.Connection, base_card_id: str) -> list[Holding]:
+    """Every container holding copies of this card, art by art. Locations first."""
+    return [
+        Holding(name, kind, art, quantity)
+        for name, kind, art, quantity in conn.execute(
+            "SELECT COALESCE(sl.name, d.name), CASE WHEN cp.deck_id IS NULL THEN sl.kind "
+            "       ELSE 'deck' END, cp.card_image_id, cp.quantity "
+            "FROM copies cp "
+            "LEFT JOIN storage_locations sl ON sl.id = cp.location_id "
+            "LEFT JOIN decks d ON d.id = cp.deck_id "
+            "WHERE cp.base_card_id = ? "
+            "ORDER BY (cp.deck_id IS NOT NULL), COALESCE(sl.name, d.name), cp.card_image_id",
+            (base_card_id,),
+        )
+    ]
+
+
 def _deposit(
     conn: sqlite3.Connection, base_card_id: str, art: str | None,
     container: Container, quantity: int,
@@ -186,10 +225,16 @@ def _withdraw(
     """
     have = _slot_quantity(conn, base_card_id, art, container)
     if have < quantity:
-        raise CollectionError(
+        message = (
             f"{container.name} has {have} {art or 'unsorted'} {base_card_id}, "
             f"not {quantity} (holds: {_describe_holdings(conn, base_card_id, container)})"
         )
+        here = (container.name, container.kind)
+        elsewhere = [h for h in holdings_of(conn, base_card_id) if (h.container, h.kind) != here]
+        if elsewhere:
+            places = ", ".join(f"{h.kind} {h.container!r} {h.quantity} {h.art}" for h in elsewhere)
+            message += f". Your {base_card_id} copies are in: {places}"
+        raise NotThere(message, elsewhere)
     remaining = have - quantity
     if remaining:
         conn.execute(
@@ -405,19 +450,7 @@ def show(conn: sqlite3.Connection, base_card_id: str) -> CardStatus | None:
         )
     ]
 
-    holdings = [
-        Holding(name, kind, art, quantity)
-        for name, kind, art, quantity in conn.execute(
-            "SELECT COALESCE(sl.name, d.name), CASE WHEN cp.deck_id IS NULL THEN sl.kind "
-            "       ELSE 'deck' END, cp.card_image_id, cp.quantity "
-            "FROM copies cp "
-            "LEFT JOIN storage_locations sl ON sl.id = cp.location_id "
-            "LEFT JOIN decks d ON d.id = cp.deck_id "
-            "WHERE cp.base_card_id = ? "
-            "ORDER BY (cp.deck_id IS NOT NULL), COALESCE(sl.name, d.name), cp.card_image_id",
-            (base_card_id,),
-        )
-    ]
+    holdings = holdings_of(conn, base_card_id)
 
     return CardStatus(
         base_card_id=base_card_id,

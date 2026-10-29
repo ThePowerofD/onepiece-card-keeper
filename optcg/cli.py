@@ -19,6 +19,7 @@ Every command takes --db to point at a different SQLite file.
 from __future__ import annotations
 
 import argparse
+import difflib
 import re
 import shlex
 import sqlite3
@@ -31,7 +32,7 @@ from optcg import collection as coll
 from optcg import resolve
 from optcg import storage as store
 from optcg.backup import BackupError
-from optcg.collection import CollectionError
+from optcg.collection import CollectionError, NotThere
 from optcg.db_setup import DB_PATH, DEFAULT_LOOSE_LOCATION, connect, create_schema
 from optcg.known_types import SEED_TYPES, seed_known_types
 from optcg.decks import (
@@ -393,13 +394,23 @@ def cmd_collection_list(conn: sqlite3.Connection, args) -> int:
     if not rows:
         print("no cards matched")
         return 0
+
+    # One row per printing; 'own' counts copies recorded as that art. Copies
+    # whose art isn't sorted yet belong to the card, not to any one printing,
+    # so they're noted once, on the card's first row, rather than on every art.
+    print(f"  {'printing':<24} {'own':>3}  {'category':<10} {'color':<12} name")
+    noted: set[str] = set()
     for card_image_id, name, category, color, owned, card_owned in rows:
-        unsorted = card_owned - owned
-        tail = f"  (+{unsorted} unsorted on the card)" if unsorted and owned else ""
-        if not owned and unsorted:
-            tail = f"  ({card_owned} owned, art not recorded)"
-        print(f"  {card_image_id:<24} {owned:>3}  {category:<10} {color or '-':<12} {name}{tail}")
-    print(f"\n  {len(rows)} printing(s)")
+        card = card_image_id.split("_")[0]
+        tail = ""
+        if card_owned > owned and card not in noted:
+            noted.add(card)
+            unsorted = coll.unsorted_copies(conn, card)
+            if unsorted:
+                tail = f"  + {unsorted} of this card, art not sorted yet"
+        own = str(owned) if owned else "-"
+        print(f"  {card_image_id:<24} {own:>3}  {category:<10} {color or '-':<12} {name}{tail}")
+    print(f"\n  {len(rows)} printing(s). `collection set-art` records which art you have.")
     return 0
 
 
@@ -605,12 +616,16 @@ def run_shell(db: Path) -> int:
         if argv[0] == "help":
             argv = [*argv[1:], "--help"]  # "help deck import" -> "deck import --help"
 
+        global _in_shell
+        _in_shell = True
         try:
             main(["--db", str(db), *argv])
         except SystemExit:
             # argparse exits after --help and on bad arguments; it has already
             # printed why, and one typo shouldn't end the session.
             pass
+        finally:
+            _in_shell = False
 
 
 # --------------------------------------------------------------------------
@@ -619,6 +634,37 @@ def run_shell(db: Path) -> int:
 
 # Keeps the line breaks in descriptions and examples instead of re-wrapping them.
 HELP_FORMAT = argparse.RawDescriptionHelpFormatter
+
+#: True while the shell runs, so help hints read the way you type them there.
+_in_shell = False
+
+_INVALID_CHOICE = re.compile(r"invalid choice: '([^']*)' \(choose from (.*)\)")
+
+
+class Parser(argparse.ArgumentParser):
+    """argparse, except a mistake shows that command's examples and where more help is.
+
+    Sub-parsers inherit the class, so every command gets this.
+    """
+
+    def error(self, message: str):
+        self.print_usage(sys.stderr)
+        print(f"error: {message}", file=sys.stderr)
+        typo = _INVALID_CHOICE.search(message)
+        if typo:
+            choices = re.findall(r"'([^']*)'", typo.group(2))
+            close = difflib.get_close_matches(typo.group(1), choices, n=1)
+            if close:
+                print(f"  did you mean {close[0]!r}?", file=sys.stderr)
+        if self.epilog:
+            print(f"\n{self.epilog}", file=sys.stderr)
+        command = self.prog.removeprefix("optcg").strip()
+        if _in_shell:
+            more = f"help {command}".strip()
+        else:
+            more = f"optcg {command} --help".replace("  ", " ")
+        print(f"\nmore help: {more}", file=sys.stderr)
+        self.exit(2)
 
 GUIDE = """\
 One Piece TCG collection and deck manager.
@@ -690,7 +736,7 @@ def _group(sub, name: str, summary: str, description: str, *examples: str):
 # --------------------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = Parser(
         prog="optcg",
         description=GUIDE,
         formatter_class=HELP_FORMAT,
@@ -1110,9 +1156,32 @@ def run_dry(args) -> int:
     return code
 
 
+def not_ready(conn: sqlite3.Connection, args) -> str | None:
+    """Why this command can't run on this database yet, or None.
+
+    Without this a fresh clone that skipped setup gets a Python traceback
+    ('no such table: decks') instead of being told what to run.
+    """
+    if args.func in (cmd_setup, cmd_sync):
+        return None
+    tables = {name for (name,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if not {"cards", "copies", "decks", "storage_locations"} <= tables:
+        return "the database isn't set up yet - run `optcg setup` first"
+    needs_cards = getattr(args, "base_card_id", None) or args.func in (
+        cmd_find, cmd_deck_import, cmd_deck_paste, cmd_collection_list,
+    )
+    if needs_cards and conn.execute("SELECT 1 FROM cards LIMIT 1").fetchone() is None:
+        return "no cards downloaded yet - run `optcg sync`"
+    return None
+
+
 def run_command(args) -> int:
     conn = connect(args.db)
     try:
+        problem = not_ready(conn, args)
+        if problem:
+            print(f"error: {problem}", file=sys.stderr)
+            return 1
         # Every command that takes a card takes it as `base_card_id`, so a name
         # is resolved here once rather than in each command (D-037).
         if getattr(args, "base_card_id", None):
@@ -1121,6 +1190,16 @@ def run_command(args) -> int:
                 return 1
             args.base_card_id = chosen
         return args.func(conn, args)
+    except NotThere as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        # One other place holds them: say exactly what to add. With several,
+        # the message above lists them and the choice is the owner's.
+        places = {(h.container, h.kind) for h in exc.elsewhere}
+        if len(places) == 1:
+            name, _ = places.pop()
+            flag = "--in" if args.func is cmd_collection_set_art else "--from"
+            print(f'  add {flag} "{name}" to use those', file=sys.stderr)
+        return 1
     except (CollectionError, StorageError, DeckError, BackupError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

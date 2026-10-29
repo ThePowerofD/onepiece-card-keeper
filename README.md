@@ -49,8 +49,10 @@ help collection add      one command: what it does, its options, examples
 ```
 
 In the shell type them as shown; from the terminal add `--help` instead
-(`optcg collection add --help`). If you get a command wrong, it shows you that
-command's usage, so you can fix it and re-run.
+(`optcg collection add --help`). If you get a command wrong, it shows that
+command's examples and where more help is, and a mistyped command name gets a
+"did you mean". Errors say what to do next — `add --in "Reiju"` when the cards
+you named are in your deck, `optcg setup` when the database isn't set up yet.
 
 **Three ideas:**
 
@@ -118,7 +120,7 @@ as UI instead of terminal tables. See **D-024** for the reasoning.
 | Sets covered | OP01–OP17, EB01–EB04, ST01–ST36, PRB01–02, promos |
 | Bad rows in logs | none |
 | Owned so far | 51 copies, 1 deck |
-| Tests | 547 passing |
+| Tests | 557 passing |
 
 **Known limitation:** OptcgAPI lags the real game. It caught up to **OP17** by
 2026-10-29 (synced that day: 158 new OP17 printings, ST31–ST36, and three new
@@ -160,7 +162,7 @@ python -m pytest tests/ --cov=optcg --cov-report=term-missing   # coverage (99%)
   Stale printings:    0
 ```
 
-...and 547 passing tests. Anything else means something changed upstream —
+...and 557 passing tests. Anything else means something changed upstream —
 `Unknown sub_types` above 0 usually means a new set introduced a card type;
 add it to `SEED_TYPES` in `optcg/known_types.py` and re-sync. `Stale printings`
 above 0 means the API stopped sending some rows; they are kept, and if you own
@@ -328,7 +330,7 @@ optcg/
   decks.py        deck import and management
   backup.py       snapshots, and JSON export/import of your own data
   cli.py          argparse entry point over all of the above
-tests/            547 tests
+tests/            557 tests
 data/             optcg.db, cache/ and backups/ (all gitignored)
 ```
 

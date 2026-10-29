@@ -815,3 +815,101 @@ class CardNameTests(CliTestCase):
         self.assertEqual(code, 1)
         self.assertIn("no card matches", out)
 
+
+class FriendlyErrorTests(CliTestCase):
+    """The audit's fixes: say what to do next, never a traceback."""
+
+    def run_err(self, *argv) -> tuple[int, str]:
+        err = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(err):
+            try:
+                code = main(["--db", str(self.db), *argv])
+            except SystemExit as exc:
+                code = exc.code
+        return code, err.getvalue()
+
+    def test_a_database_that_was_never_set_up(self):
+        fresh = Path(self.tmp.name) / "never.db"
+        for argv in (["deck", "list"], ["find", "nami"], ["collection", "add", "OP05-001", "1"]):
+            err = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(err):
+                code = main(["--db", str(fresh), *argv])
+            self.assertEqual(code, 1)
+            self.assertIn("run `optcg setup` first", err.getvalue())
+            self.assertNotIn("Traceback", err.getvalue())
+
+    def test_set_up_but_no_cards_downloaded(self):
+        empty = Path(self.tmp.name) / "empty.db"
+        conn = sqlite3.connect(empty)
+        create_schema(conn)
+        conn.close()
+        err = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(err):
+            code = main(["--db", str(empty), "find", "nami"])
+        self.assertEqual(code, 1)
+        self.assertIn("run `optcg sync`", err.getvalue())
+
+    def test_locations_work_before_any_cards(self):
+        empty = Path(self.tmp.name) / "empty.db"
+        conn = sqlite3.connect(empty)
+        create_schema(conn)
+        conn.close()
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["--db", str(empty), "location", "add", "Binder A"]), 0)
+
+    def test_copies_elsewhere_names_the_flag_to_add(self):
+        self.run_cli("deck", "import", str(self.decklist), "--name", "Red")
+        code, _, err = self.run_cli("collection", "set-art", "OP05-001", "1", "p1")
+        self.assertEqual(code, 1)
+        self.assertIn("copies are in: deck 'Red' 4 unsorted", err)
+        self.assertIn('add --in "Red"', err)
+
+        self.run_cli("location", "add", "Binder A", "--kind", "binder")
+        _, _, err = self.run_cli("collection", "move", "OP05-001", "1", "--to", "Binder A")
+        self.assertIn('add --from "Red"', err)
+
+    def test_copies_in_several_places_are_listed_without_guessing(self):
+        self.run_cli("deck", "import", str(self.decklist), "--name", "Red")
+        self.run_cli("location", "add", "Binder A", "--kind", "binder")
+        self.run_cli("collection", "add", "OP05-001", "1", "--to", "Binder A")
+        _, _, err = self.run_cli("collection", "remove", "OP05-001", "1")
+        self.assertIn("binder 'Binder A'", err)
+        self.assertIn("deck 'Red'", err)
+        self.assertNotIn("add --from", err)
+
+    def test_a_wrong_command_shows_its_examples_and_more_help(self):
+        code, err = self.run_err("collection", "add", "OP05-001")
+        self.assertEqual(code, 2)
+        self.assertIn("required: quantity", err)
+        self.assertIn("examples:", err)
+        self.assertIn("collection add OP06-060 2", err)
+        self.assertIn("more help: optcg collection add --help", err)
+
+    def test_a_mistyped_group_suggests_the_right_one(self):
+        code, err = self.run_err("colection", "add", "OP05-001", "1")
+        self.assertEqual(code, 2)
+        self.assertIn("did you mean 'collection'?", err)
+
+    def test_a_mistyped_command_suggests_the_right_one(self):
+        _, err = self.run_err("collection", "ad", "OP05-001", "1")
+        self.assertIn("did you mean 'add'?", err)
+        self.assertIn("more help: optcg collection --help", err)
+
+    def test_in_the_shell_more_help_reads_the_shell_way(self):
+        err = io.StringIO()
+        with mock.patch("builtins.input", side_effect=["collection add OP05-001", EOFError]), \
+             redirect_stdout(io.StringIO()), redirect_stderr(err):
+            main(["--db", str(self.db), "shell"])
+        self.assertIn("more help: help collection add", err.getvalue())
+
+    def test_list_notes_unsorted_copies_once_per_card(self):
+        self.run_cli("collection", "add", "OP05-001", "3")
+        self.run_cli("collection", "set-art", "OP05-001", "1", "p1")
+        _, out, _ = self.run_cli("collection", "list", "--set", "OP05")
+        lines = [l for l in out.splitlines() if "OP05-001" in l]
+        self.assertEqual(len(lines), 2)  # the base printing and _p1
+        self.assertIn("+ 2 of this card, art not sorted yet", lines[0])
+        self.assertNotIn("not sorted", lines[1])
+        self.assertIn(" 1 ", lines[1])  # one recorded as p1
+        self.assertIn("printing", out.splitlines()[0])
+

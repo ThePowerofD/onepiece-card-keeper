@@ -51,6 +51,7 @@ knowing why it's that way? If not, it doesn't need an entry.
 | [D-035](#d-035--stale-printings-are-reported-never-deleted) | **Stale printings are reported, never deleted** | 2026-10-29 |
 | [D-036](#d-036--the-command-is-optcg-the-package-is-optcg) | The command is `optcg`; the package is `optcg` | 2026-10-29 |
 | [D-037](#d-037--cards-can-be-named-a-shared-name-asks-which) | Cards can be named; a shared name asks which | 2026-10-29 |
+| [D-038](#d-038--every-error-says-what-to-do-next) | Every error says what to do next | 2026-10-29 |
 
 ---
 
@@ -1263,3 +1264,34 @@ for `ichjii`: a short typo looks nothing like a long full name.
 The lookup is in `resolve.py` and returns data; the picker is in the CLI and
 runs once, in `run_command`, for every command with a card argument. A web
 caller gets the same matches and draws its own list.
+
+---
+
+## D-038 — Every error says what to do next
+
+**2026-10-29** · *The CLI review that produced D-036 and D-037*
+
+The CLI was walked through as a stranger from GitHub would meet it, on a copy
+of the real database. The rule that came out of it: **an error names the next
+thing to type**, and is never a Python traceback.
+
+- **Before setup**, any command used to crash with `no such table: decks`. Now
+  it says to run `optcg setup`; with the schema but no cards, `optcg sync`.
+  Commands that need no cards - adding a location - still run.
+- **Copies not where you said.** The commonest miss is forgetting that a
+  deck's copies sit in the deck: `set-art OP06-060 1 p2` looks in just-loose.
+  The error now says where the copies are, and when that is one place, the
+  exact flag to add (`add --in "Reiju"`, or `--from` for move, remove, loan).
+  With several places it lists them and leaves the choice alone.
+- **A wrong command** shows that command's examples and the help to read next,
+  written the way you would type it - `help collection add` in the shell,
+  `optcg collection add --help` outside it. A mistyped command name gets a
+  "did you mean".
+
+**`collection list` stays one row per printing** - the owner chose this over
+one row per card. `find` (D-037) already answers "which cards, how many do I
+own"; `list` is where you go when the *art* matters, so splitting by printing is
+its job. What was wrong was the wording: copies with no art recorded were
+reported on every printing of the card (`0 ... (4 owned, art not recorded)`, four
+times). They belong to the card, not to any printing, so they are now noted
+once, on the card's first row, and an art you own none of shows `-`.
