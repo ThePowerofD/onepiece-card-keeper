@@ -151,6 +151,22 @@ the caller can ask (D-017). The API should return it as a distinct, recognisable
 response and the UI should offer *replace* or *import as a second deck* — the two
 options D-017 refuses to choose between. Never auto-pick.
 
+**Building a deck from a wishlist is a screen, not a command** (D-041). A
+physical deck is exactly what's in it, so turning a wishlist physical means
+*gathering its cards into it* - and choosing where each one comes from is what a
+UI does well and a terminal does badly. Decided with the owner, for when this is
+built:
+
+- **Pick the source per card.** Taken automatically when a card is in exactly
+  one storage place; asked when it's in several.
+- **Taking from another physical deck always asks** - it shrinks that deck.
+- **Short of cards: refuse by default**, listing what's missing, so the wishlist
+  keeps showing what to buy. A `--partial`-style choice builds with what you
+  have; the missing cards leave the new deck's list.
+
+Until then the CLI refuses `set-physical` on a wishlist with cards listed, and
+`deck new` + `deck add` build a deck by hand.
+
 **Done when:** you paste a Limitless list into the browser and see what you're
 missing.
 

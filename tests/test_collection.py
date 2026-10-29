@@ -266,7 +266,8 @@ class CommittedTests(Base):
         wishlist = deck_container(self.conn, add_deck(self.conn, "Someday", False))
         add(self.conn, "OP05-097", 4)
         move(self.conn, "OP05-097", 2, self.loose, physical)
-        move(self.conn, "OP05-097", 1, self.loose, wishlist)
+        with self.assertRaises(CollectionError):
+            move(self.conn, "OP05-097", 1, self.loose, wishlist)
         self.assertEqual(committed(self.conn, "OP05-097"), 2)
 
     def test_a_deck_never_competes_with_itself(self):

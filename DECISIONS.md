@@ -54,6 +54,7 @@ knowing why it's that way? If not, it doesn't need an entry.
 | [D-038](#d-038--every-error-says-what-to-do-next) | Every error says what to do next | 2026-10-29 |
 | [D-039](#d-039--your-collection-is-what-you-own-browse-is-everything) | Your collection is what you own; `browse` is everything | 2026-10-29 |
 | [D-040](#d-040--storage-places-have-a-type-from-a-list-you-add-to) | Storage places have a type, from a list you add to | 2026-10-29 |
+| [D-041](#d-041--a-physical-deck-is-exactly-whats-in-it) | **A physical deck is exactly what's in it** | 2026-10-29 |
 
 ---
 
@@ -1373,3 +1374,57 @@ carry the type list, so a type with no places yet survives a move between
 machines, and import never removes a type.
 
 `location` no longer works - the same clean break as `src.cli` (D-036).
+
+---
+
+## D-041 — A physical deck is exactly what's in it
+
+**2026-10-29** · *Supersedes [D-030](#d-030--every-copy-is-somewhere-art-is-recorded-on-the-copy)'s incomplete physical decks; D-009, D-010, D-011 and D-022 unchanged*
+
+D-030 gave a physical deck two numbers per card: its **list** (`deck_cards`)
+and its **contents** (copies whose container is the deck), and let them differ -
+*"strip a deck to build another, and the hole stays visible until you refill
+it."* The owner asked how to take cards out of a deck, and on seeing that model
+chose against it: a card is either in the deck or it isn't, and a deck that
+remembers "this card was here" gets confusing as soon as some cards move for
+good and others for a night.
+
+**So a physical deck's list is its contents, always.** Every way of changing
+what's in a physical deck changes its list by the same amount, in the same
+transaction:
+
+| | list | cards |
+|---|---|---|
+| `deck add` | grows | in, from just-loose or `--from` a place |
+| `deck remove` | shrinks | out, to just-loose or `--to` a place (or deck) |
+| `collection move/add/remove/loan` touching a deck | follows | as asked |
+| re-import with replace | the new list | cards it runs fewer of go to just-loose |
+
+**Being short is fine; being remembered isn't.** Take 2 Cosette to play in
+another deck and Reiju is a 49-card deck. `deck show` says *"a full deck is
+50"* - a nudge about size, not a record of which card left. Nothing tracks
+borrowed cards; that was considered (two numbers, `take`/`return` commands)
+and rejected as the confusion it would create.
+
+**What D-030 still had right, and keeps:** you still own every card taken out -
+they go to just-loose, never vanish (D-022's ownership never drops). Unsorted
+copies leave a deck before sorted ones when no art is named, since the deck
+lists the card, not a printing. Taking the leader out leaves the deck without
+one.
+
+**A wishlist holds no cards - now enforced.** D-030 *said* placing into a
+wishlist was refused; nothing refused it, and four tests put copies in one.
+Moving or adding into a wishlist is now an error, and replacing a physical deck
+with a wishlist import empties it.
+
+**Building a deck from a wishlist moves to the app.** A wishlist with cards
+listed can't become physical in place - it would be a physical deck holding
+none of its list. Gathering its cards, card by card from wherever they are, is
+a screen (recorded in PHASE_2 M3 with the rules agreed). Until then:
+`deck new` makes an empty physical deck and `deck add` fills it. An *empty*
+wishlist can still be switched, and a physical deck can still go back to a
+wishlist - its cards return to just-loose and the list stays, as the plan.
+
+A database from before this can still hold a deck whose list and contents
+differ. `deck show` points those out rather than hiding them; nothing rewrites
+them silently.

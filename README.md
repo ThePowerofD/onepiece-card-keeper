@@ -134,7 +134,7 @@ as UI instead of terminal tables. See **D-024** for the reasoning.
 | Sets covered | OP01–OP17, EB01–EB04, ST01–ST36, PRB01–02, promos |
 | Bad rows in logs | none |
 | Owned so far | 51 copies, 1 deck |
-| Tests | 582 passing |
+| Tests | 610 passing |
 
 **Known limitation:** OptcgAPI lags the real game. It caught up to **OP17** by
 2026-10-29 (synced that day: 158 new OP17 printings, ST31–ST36, and three new
@@ -176,7 +176,7 @@ python -m pytest tests/ --cov=optcg --cov-report=term-missing   # coverage (99%)
   Stale printings:    0
 ```
 
-...and 582 passing tests. Anything else means something changed upstream —
+...and 610 passing tests. Anything else means something changed upstream —
 `Unknown sub_types` above 0 usually means a new set introduced a card type;
 add it to `SEED_TYPES` in `optcg/known_types.py` and re-sync. `Stale printings`
 above 0 means the API stopped sending some rows; they are kept, and if you own
@@ -214,8 +214,12 @@ optcg deck import mydeck.txt --name "Red Luffy" --physical
 optcg deck import wanted.txt --name "Purple Doffy" --wishlist
 optcg deck paste --name "Red Luffy"  # type/paste the list, finish with: end
 optcg deck list
-optcg deck show "Red Luffy"          # owned vs missing per card
-optcg deck set-physical "Purple Doffy"
+optcg deck show "Red Luffy"          # what's in it; for a wishlist, what you're missing
+optcg deck new "Enel"                # an empty deck, to fill card by card
+optcg deck add "Enel" cosette 2 --from "Binder A"      # cards in; the list grows
+optcg deck remove "Red Luffy" OP05-097 2               # cards out to just-loose; the list shrinks
+optcg deck remove "Red Luffy" OP05-097 2 --to "Enel"   # straight into another deck
+optcg deck set-physical "Red Luffy" --off              # back to a wishlist: cards out, list kept
 optcg deck delete "Red Luffy"        # asks first; copies return to just-loose
 optcg deck import new.txt --name "Enel" --dry-run   # see the result, save nothing
 
@@ -290,10 +294,16 @@ printing. Record the art later, where the copies actually are:
 `collection set-art OP05-097 1 p1 --in "Mewtwo Binder"`. It splits the row; your
 total never moves.
 
-**A physical deck holds real copies** — they stop counting as available
-elsewhere. It can also be **incomplete**: take four cards out to build another
-deck and `deck show` reports them as not sleeved until you put them back. A
-wishlist deck holds no copies and just reports what you're missing.
+**A physical deck is exactly what's in it** (D-041) — its copies stop counting
+as available elsewhere, and its list *is* its contents. Take 2 cards out for
+another deck and this one is simply 2 short: `deck show` says *"49 cards — a
+full deck is 50"*, and nothing remembers which cards left. Taking cards out any
+way — `deck remove`, `collection move --from` the deck, a replace import that
+drops them — shrinks the list; putting them in grows it.
+
+**A wishlist deck is a plan:** a list of cards you want, holding none of them,
+that reports what you're missing. It can't become a physical deck while it lists
+cards it doesn't hold; build the real one with `deck new` and `deck add`.
 
 **Nothing goes negative.** Moving or removing more than a container holds is an
 error that writes nothing, and tells you what's actually there.
@@ -334,7 +344,7 @@ optcg storage add "Binder A" --type binder
 optcg collection add OP05-097 2                  # into just-loose
 optcg collection move OP05-097 2 --to "Binder A"
 optcg collection show OP05-097   # where they are, and which arts
-optcg deck show "Red Luffy"      # owned, sleeved, missing
+optcg deck show "Red Luffy"      # what is in it
 ```
 
 ---
@@ -355,7 +365,7 @@ optcg/
   decks.py        deck import and management
   backup.py       snapshots, and JSON export/import of your own data
   cli.py          argparse entry point over all of the above
-tests/            582 tests
+tests/            610 tests
 data/             optcg.db, cache/ and backups/ (all gitignored)
 ```
 

@@ -21,10 +21,18 @@ from pathlib import Path
 from typing import NamedTuple
 
 from optcg.backup import auto_snapshot
-from optcg.collection import committed_elsewhere, deposit, empty_container, total_owned
+from optcg.collection import (
+    adjust_recipe,
+    committed_elsewhere,
+    deposit,
+    empty_container,
+    move,
+    take_any,
+    total_owned,
+)
 from optcg.deck_parser import parse_decklist
 from optcg.resolve import unknown_ids
-from optcg.storage import deck_container
+from optcg.storage import Container, deck_container, loose_container
 
 MAX_COPIES = 4          # warned, never enforced (D-004)
 STANDARD_DECK_SIZE = 50  # excluding the leader
@@ -55,6 +63,7 @@ class ImportResult(NamedTuple):
     collection_credited: int
     replaced: bool
     warnings: list[str]
+    returned_to_loose: int = 0     # copies a replace took out of the deck (D-041)
 
 
 def find_deck(conn: sqlite3.Connection, name: str) -> int | None:
@@ -146,6 +155,7 @@ def import_decklist(
             auto_snapshot(conn, "before-deck-replace")
 
     credited = 0
+    returned = 0
     try:
         if replaced:
             # The deck row survives so its sleeved copies stay attached to it
@@ -166,6 +176,24 @@ def import_decklist(
 
         container = deck_container(conn, deck_id)
         already = _copies_in_deck(conn, deck_id)
+
+        # A physical deck is exactly what's in it (D-041): cards the new list
+        # runs fewer of - or dropped - leave the deck for just-loose. You still
+        # own them (D-022); they just aren't in this deck any more.
+        new_counts = {cid: qty for cid, qty in entries}
+        if replaced and not is_physical:
+            # Replaced by a wishlist: a wishlist holds no cards (D-010).
+            returned += empty_container(conn, container)
+            already = {}
+        elif replaced:
+            loose = loose_container(conn)
+            for base_card_id, have in already.items():
+                excess = have - new_counts.get(base_card_id, 0)
+                if excess > 0:
+                    for art, piece in take_any(conn, base_card_id, excess, container):
+                        deposit(conn, base_card_id, piece, loose, art)
+                    returned += excess
+            already = _copies_in_deck(conn, deck_id)
 
         for base_card_id, qty in entries:
             conn.execute(
@@ -201,6 +229,7 @@ def import_decklist(
         collection_credited=credited,
         replaced=replaced,
         warnings=warnings,
+        returned_to_loose=returned,
     )
 
 
@@ -401,13 +430,28 @@ def delete_deck(conn: sqlite3.Connection, ref: str | int) -> DeckDeletion:
 
 
 def set_physical(conn: sqlite3.Connection, ref: str | int, physical: bool) -> list[str]:
-    """Toggle whether a deck holds real copies. Returns warnings, never blocks.
+    """Turn a physical deck into a wishlist, or an empty wishlist into a physical deck.
 
-    Turning a deck back into a wishlist **unmakes** it: the sleeved copies
-    return to just-loose. Turning a wishlist deck physical places nothing — you
-    haven't sleeved it yet — so it reports as unbuilt until copies are moved in.
+    Turning a deck into a wishlist **unmakes** it: its cards return to
+    just-loose and its list stays, as the plan. The other way is refused for a
+    wishlist with cards on its list: a physical deck is exactly what's in it
+    (D-041), so it can't start out empty with a list of cards it doesn't hold.
+    Gathering a wishlist's cards into a deck is a screen for the app (PHASE_2
+    M3); until then, build it with `new_deck` and `add_to_deck`.
     """
     deck_id = resolve_deck(conn, ref)
+    if physical:
+        listed = conn.execute(
+            "SELECT COALESCE(SUM(quantity), 0) FROM deck_cards WHERE deck_id = ?", (deck_id,)
+        ).fetchone()[0]
+        is_physical = conn.execute(
+            "SELECT is_physical FROM decks WHERE id = ?", (deck_id,)).fetchone()[0]
+        if listed and not is_physical:
+            raise DeckError(
+                f"a wishlist with {listed} cards on its list can't become a physical deck "
+                f"holding none of them. Build the real deck with `deck new` and `deck add`, "
+                f"or import its list as a physical deck if the cards are new to you"
+            )
     try:
         if not physical:
             empty_container(conn, deck_container(conn, deck_id))
@@ -419,20 +463,110 @@ def set_physical(conn: sqlite3.Connection, ref: str | int, physical: bool) -> li
     except Exception:
         conn.rollback()
         raise
+    return []
 
-    if not physical:
-        return []
 
-    warnings = []
-    for card in show_deck(conn, deck_id).cards:
-        if card.missing > 0:
-            warnings.append(
-                f"{card.base_card_id}: deck needs {card.needed} but only "
-                f"{max(0, card.available_to_deck)} available"
-            )
-        elif card.unsleeved > 0:
-            warnings.append(
-                f"{card.base_card_id}: {card.unsleeved} of {card.needed} not sleeved "
-                f"into this deck yet"
-            )
-    return warnings
+# --------------------------------------------------------------------------
+# editing a deck (D-041)
+# --------------------------------------------------------------------------
+
+def new_deck(conn: sqlite3.Connection, name: str, is_physical: bool = True) -> int:
+    """An empty deck to build up with `add_to_deck`. Returns its id."""
+    clean = name.strip()
+    if not clean:
+        raise DeckError("deck name cannot be empty")
+    existing = find_deck(conn, clean)
+    if existing is not None:
+        raise DeckError(f"a deck named {clean!r} already exists (id {existing})")
+    cur = conn.execute("INSERT INTO decks (name, is_physical) VALUES (?, ?)",
+                       (clean, 1 if is_physical else 0))
+    conn.commit()
+    return cur.lastrowid
+
+
+def _is_physical(conn: sqlite3.Connection, deck_id: int) -> bool:
+    return bool(conn.execute("SELECT is_physical FROM decks WHERE id = ?", (deck_id,)).fetchone()[0])
+
+
+def _listed(conn: sqlite3.Connection, deck_id: int, base_card_id: str) -> int:
+    row = conn.execute("SELECT quantity FROM deck_cards WHERE deck_id = ? AND base_card_id = ?",
+                       (deck_id, base_card_id)).fetchone()
+    return row[0] if row else 0
+
+
+def add_to_deck(
+    conn: sqlite3.Connection,
+    ref: str | int,
+    base_card_id: str,
+    quantity: int,
+    frm: Container | None = None,
+    art: str | None = None,
+) -> int:
+    """Put cards into a deck. Returns how many of the card the deck now runs.
+
+    A physical deck takes real copies, from just-loose unless another place is
+    named, and its list grows with them. A wishlist only changes its list.
+    """
+    if quantity <= 0:
+        raise DeckError("quantity must be a positive number of copies")
+    deck_id = resolve_deck(conn, ref)
+    if _is_physical(conn, deck_id):
+        move(conn, base_card_id, quantity, frm or loose_container(conn),
+             deck_container(conn, deck_id), art)  # the list follows the copies
+    else:
+        if frm is not None:
+            raise DeckError("a wishlist deck holds no cards - leave out --from to add to its list")
+        adjust_recipe(conn, deck_id, base_card_id, quantity)
+        conn.commit()
+    return _listed(conn, deck_id, base_card_id)
+
+
+def remove_from_deck(
+    conn: sqlite3.Connection,
+    ref: str | int,
+    base_card_id: str,
+    quantity: int,
+    to: Container | None = None,
+    art: str | None = None,
+) -> int:
+    """Take cards out of a deck. Returns how many of the card the deck still runs.
+
+    From a physical deck the copies go to just-loose unless another place is
+    named - you still own them - and the list shrinks with them. With no art
+    named, unsorted copies leave first. A wishlist only changes its list.
+    """
+    if quantity <= 0:
+        raise DeckError("quantity must be a positive number of copies")
+    deck_id = resolve_deck(conn, ref)
+    name = conn.execute("SELECT name FROM decks WHERE id = ?", (deck_id,)).fetchone()[0]
+    listed = _listed(conn, deck_id, base_card_id)
+    if listed < quantity:
+        raise DeckError(f"{name!r} runs {listed} {base_card_id}, not {quantity}")
+
+    if not _is_physical(conn, deck_id):
+        if to is not None:
+            raise DeckError("a wishlist deck holds no cards - leave out --to")
+        adjust_recipe(conn, deck_id, base_card_id, -quantity)
+        conn.commit()
+        return _listed(conn, deck_id, base_card_id)
+
+    destination = to or loose_container(conn)
+    container = deck_container(conn, deck_id)
+    if art is not None:
+        # One named art: `move` checks it's really there, and both lists follow.
+        move(conn, base_card_id, quantity, container, destination, art)
+        return _listed(conn, deck_id, base_card_id)
+
+    if destination.deck_id is not None and not _is_physical(conn, destination.deck_id):
+        raise DeckError(f"{destination.name!r} is a wishlist deck - it holds no cards")
+    try:
+        for piece_art, piece in take_any(conn, base_card_id, quantity, container):
+            deposit(conn, base_card_id, piece, destination, piece_art)
+        adjust_recipe(conn, deck_id, base_card_id, -quantity)
+        if destination.deck_id is not None:
+            adjust_recipe(conn, destination.deck_id, base_card_id, quantity)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return _listed(conn, deck_id, base_card_id)

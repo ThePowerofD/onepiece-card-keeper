@@ -14,7 +14,7 @@ from __future__ import annotations
 import sqlite3
 import unittest
 
-from optcg.collection import add, move, show
+from optcg.collection import CollectionError, add, move, show
 from optcg.db_setup import DEFAULT_LOOSE_LOCATION, create_schema
 from optcg.storage import deck_container, loose_container
 
@@ -208,14 +208,17 @@ class AvailabilityTests(unittest.TestCase):
         self.sleeve("Red Luffy", 3)
         self.assertEqual(available(self.conn, "OP05-097"), (4, 3, 1))
 
-    def test_a_wishlist_deck_commits_nothing(self):
-        """Copies can sit in a wishlist deck's container without being committed."""
-        self.sleeve("Someday", 4, physical=False)
+    def test_a_wishlist_deck_holds_no_cards_and_commits_nothing(self):
+        """D-030 said placing into a wishlist is refused; D-041 enforces it."""
+        with self.assertRaises(CollectionError):
+            self.sleeve("Someday", 4, physical=False)
         self.assertEqual(available(self.conn, "OP05-097"), (4, 0, 4))
 
     def test_only_physical_decks_count_when_both_exist(self):
         self.sleeve("Real", 2)
-        self.sleeve("Wishlist", 1, physical=False)
+        wish = add_deck(self.conn, "Wishlist", False)
+        self.conn.execute("INSERT INTO deck_cards (deck_id, base_card_id, quantity) "
+                          "VALUES (?, 'OP05-097', 4)", (wish,))
         self.assertEqual(available(self.conn, "OP05-097"), (4, 2, 2))
 
     def test_multiple_physical_decks_sum(self):

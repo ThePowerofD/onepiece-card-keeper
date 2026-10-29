@@ -43,12 +43,16 @@ from optcg.db_setup import (
 )
 from optcg.known_types import SEED_TYPES, seed_known_types
 from optcg.decks import (
+    STANDARD_DECK_SIZE,
     DeckError,
     DeckNameExists,
+    add_to_deck,
     delete_deck,
     import_deck,
     import_decklist,
     list_decks,
+    new_deck,
+    remove_from_deck,
     set_physical,
     show_deck,
 )
@@ -236,6 +240,9 @@ def _import_and_report(run, on_conflict: str | None) -> int:
         print(f"  collection:    +{result.collection_credited} copies")
     else:
         print("  collection:    untouched (wishlist)")
+    if result.returned_to_loose:
+        print(f"  taken out:     {result.returned_to_loose} copies the new list doesn't run "
+              f"went to just-loose - you still own them")
     warn(result.warnings)
     return 0
 
@@ -271,11 +278,10 @@ def cmd_deck_list(conn: sqlite3.Connection, args) -> int:
 
 def cmd_deck_show(conn: sqlite3.Connection, args) -> int:
     detail = show_deck(conn, args.deck)
-    kind = "physical" if detail.is_physical else "wishlist"
-    status = "complete" if detail.is_complete else f"missing {detail.missing_total}"
     if detail.is_physical:
-        status += " - built" if detail.is_built else f" - {detail.unsleeved_total} not sleeved"
-    print(f"{detail.name}  [{kind}]  {detail.total_cards} cards - {status}")
+        return show_physical_deck(detail)
+    status = "complete" if detail.is_complete else f"missing {detail.missing_total}"
+    print(f"{detail.name}  [wishlist]  {detail.total_cards} cards - {status}")
     print()
     print(f"  {'card':<14} {'need':>4} {'in':>4} {'own':>4} {'avail':>5} {'miss':>4}  name")
     for c in detail.cards:
@@ -286,8 +292,34 @@ def cmd_deck_show(conn: sqlite3.Connection, args) -> int:
             f"{max(0, c.available_to_deck):>5} {c.missing:>4}  {c.name}{extra}"
         )
     print()
-    print("  'in' is copies actually sleeved into this deck; 'avail' counts copies")
-    print("  not sleeved into OTHER physical decks.")
+    print("  'own' is every copy you have; 'avail' leaves out copies that are in")
+    print("  your physical decks.")
+    return 0
+
+
+def show_physical_deck(detail) -> int:
+    """A physical deck is exactly what's in it (D-041): one number per card."""
+    in_deck = sum(c.in_deck for c in detail.cards)
+    main = in_deck - sum(c.in_deck for c in detail.cards if c.is_leader)
+    size = f"{in_deck} cards"
+    if main != STANDARD_DECK_SIZE:
+        size += f" - a full deck is {STANDARD_DECK_SIZE} plus the leader, this one has {main}"
+    print(f"{detail.name}  [physical]  {size}")
+    print()
+    print(f"  {'card':<14} {'in':>3}  name")
+    for c in detail.cards:
+        if not c.in_deck:
+            continue
+        marker = "L" if c.is_leader else " "
+        print(f"{marker} {c.base_card_id:<14} {c.in_deck:>3}  {c.name}")
+
+    # Only a database from before D-041 can have these: a list that says more
+    # (or less) than the deck holds. Say so rather than hide it.
+    off = [c for c in detail.cards if c.needed != c.in_deck]
+    if off:
+        print(f"\n  {len(off)} card(s) where the list and the deck disagree (from an older")
+        print("  version): " + ", ".join(f"{c.base_card_id} listed {c.needed}, in {c.in_deck}"
+                                         for c in off[:5]))
     return 0
 
 
@@ -295,16 +327,46 @@ def cmd_deck_delete(conn: sqlite3.Connection, args) -> int:
     if not args.yes:
         detail = show_deck(conn, args.deck)
         kind = "physical" if detail.is_physical else "wishlist"
-        print(f"Deleting {kind} deck {detail.name!r} deletes its recipe "
+        print(f"Deleting {kind} deck {detail.name!r} deletes its list "
               f"({detail.total_cards} cards).")
         if detail.sleeved_total:
-            print(f"Its {detail.sleeved_total} sleeved copies go to just-loose - "
+            print(f"The {detail.sleeved_total} copies in it go to just-loose - "
                   f"you still own them.")
         if not ask_to_continue("delete it?"):
             return 1
     result = delete_deck(conn, args.deck)
     print(f"deleted deck {result.name!r}. "
           f"{result.copies_returned} copies went back to just-loose.")
+    return 0
+
+
+def cmd_deck_new(conn: sqlite3.Connection, args) -> int:
+    physical = not args.wishlist
+    deck_id = new_deck(conn, args.name, physical)
+    kind = "physical" if physical else "wishlist"
+    print(f"created empty {kind} deck {args.name!r} (id {deck_id})")
+    print(f"  fill it with: deck add {shlex.quote(args.name)} <card> <quantity>")
+    return 0
+
+
+def cmd_deck_add(conn: sqlite3.Connection, args) -> int:
+    frm = store.resolve_container(conn, getattr(args, "from"), args.from_kind) \
+        if getattr(args, "from") else None
+    now = add_to_deck(conn, args.deck, args.base_card_id, args.quantity, frm, args.art)
+    print(f"{args.deck}: +{args.quantity} {args.base_card_id} - now runs {now}")
+    return 0
+
+
+def cmd_deck_remove(conn: sqlite3.Connection, args) -> int:
+    to = None
+    if args.to:
+        to = destination(conn, args.to, args.to_kind)
+        if to is None:
+            return 1
+    left = remove_from_deck(conn, args.deck, args.base_card_id, args.quantity, to, args.art)
+    where = to.name if to else "just-loose"
+    print(f"{args.deck}: -{args.quantity} {args.base_card_id} - now runs {left}")
+    print(f"  the {args.quantity} copies went to {where} - you still own them")
     return 0
 
 
@@ -998,13 +1060,68 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_deck_delete)
 
     p = _command(
-        deck, "set-physical", "mark a deck as sleeved, or back to a wishlist",
-        'deck set-physical "Enel"',
+        deck, "set-physical", "turn a physical deck into a wishlist (--off)",
         'deck set-physical "Enel" --off',
+        description="With --off, turn a physical deck into a wishlist: its cards go to\n"
+                    "just-loose and its list stays, as the plan. The other way only works\n"
+                    "for an empty wishlist - a physical deck is exactly what's in it, so\n"
+                    "build one with `deck new` and `deck add`.",
     )
     p.add_argument("deck", help="deck name or id")
     p.add_argument("--off", action="store_true", help="make it a wishlist deck instead")
     p.set_defaults(func=cmd_deck_set_physical)
+
+    # Editing decks (D-041): a physical deck is exactly what's in it, so these
+    # move real cards, and the list follows.
+    deck_place_type = "the place's storage type, or 'deck' - only needed when two places share a name"
+
+    p = _command(
+        deck, "new", "start an empty deck, to fill with `deck add`",
+        'deck new "Enel"',
+        'deck new "Enel" --wishlist',
+    )
+    p.add_argument("name", help=f"deck name - {NAME_HELP}")
+    p.add_argument("--wishlist", action="store_true", help="a list of cards you want, not a real deck")
+    p.set_defaults(func=cmd_deck_new)
+
+    p = _command(
+        deck, "add", "put cards into a deck - its list grows with them",
+        'deck add "Reiju" cosette 2',
+        'deck add "Reiju" OP06-072 1 --from "Binder A"',
+        'deck add "Enel" "monkey d luffy" 4 --from "Bulk 1"',
+        description="Put cards into a deck. For a physical deck they are real copies,\n"
+                    "taken from just-loose unless you name another place with --from, and\n"
+                    "the deck's list grows with them. For a wishlist only the list changes.\n"
+                    "Card names with spaces need quotes.",
+    )
+    p.add_argument("deck", help="deck name or id")
+    p.add_argument("base_card_id", metavar="card", help=ID_HELP)
+    p.add_argument("quantity", type=int)
+    p.add_argument("--from", default=None, help="where the cards are (default: just-loose)")
+    p.add_argument("--from-type", dest="from_kind", metavar="<type>", default=None,
+                   help=deck_place_type)
+    p.add_argument("--art", default=None, help="which printing to take")
+    p.set_defaults(func=cmd_deck_add)
+
+    p = _command(
+        deck, "remove", "take cards out of a deck - its list shrinks with them",
+        'deck remove "Reiju" cosette 2',
+        'deck remove "Reiju" OP06-072 1 --to "Binder A"',
+        'deck remove "Reiju" ichiji 2 --to "Enel"',
+        description="Take cards out of a deck. From a physical deck they go to just-loose,\n"
+                    "or to the place you name with --to - another deck too - and you still\n"
+                    "own them. The deck's list shrinks with them: nothing remembers they\n"
+                    "were there (D-041). For a wishlist only the list changes.",
+    )
+    p.add_argument("deck", help="deck name or id")
+    p.add_argument("base_card_id", metavar="card", help=ID_HELP)
+    p.add_argument("quantity", type=int)
+    p.add_argument("--to", default=None,
+                   help="where they go (default: just-loose) - offered to create it if new")
+    p.add_argument("--to-type", dest="to_kind", metavar="<type>", default=None,
+                   help=deck_place_type)
+    p.add_argument("--art", default=None, help="which printing to take out (default: any)")
+    p.set_defaults(func=cmd_deck_remove)
 
     # ---- collection -----------------------------------------------------
     col = _group(

@@ -215,7 +215,7 @@ def _deposit(
 
 def _withdraw(
     conn: sqlite3.Connection, base_card_id: str, art: str | None,
-    container: Container, quantity: int,
+    container: Container, quantity: int, going_to: Container | None = None,
 ) -> None:
     """Take copies out of a slot, or refuse. No commit — callers own the transaction.
 
@@ -230,7 +230,9 @@ def _withdraw(
             f"not {quantity} (holds: {_describe_holdings(conn, base_card_id, container)})"
         )
         here = (container.name, container.kind)
-        elsewhere = [h for h in holdings_of(conn, base_card_id) if (h.container, h.kind) != here]
+        # Where else they are - but never where they're going: that can't be the source.
+        skip = {here} | ({(going_to.name, going_to.kind)} if going_to else set())
+        elsewhere = [h for h in holdings_of(conn, base_card_id) if (h.container, h.kind) not in skip]
         if elsewhere:
             places = ", ".join(f"{h.kind} {h.container!r} {h.quantity} {h.art}" for h in elsewhere)
             message += f". Your {base_card_id} copies are in: {places}"
@@ -295,6 +297,75 @@ def empty_container(conn: sqlite3.Connection, container: Container) -> int:
 
 
 # --------------------------------------------------------------------------
+# decks follow their cards (D-041)
+# --------------------------------------------------------------------------
+
+def _refuse_wishlist(conn: sqlite3.Connection, container: Container) -> None:
+    """A wishlist deck is a plan and holds no cards (D-010, D-030)."""
+    if container.deck_id is None:
+        return
+    row = conn.execute("SELECT is_physical FROM decks WHERE id = ?", (container.deck_id,)).fetchone()
+    if row is not None and not row[0]:
+        raise CollectionError(
+            f"{container.name!r} is a wishlist deck - it's a list of cards you want, "
+            f"and holds none. Use `deck add` to change the list."
+        )
+
+
+def adjust_recipe(conn: sqlite3.Connection, deck_id: int, base_card_id: str, delta: int) -> None:
+    """Change how many of a card a deck's list asks for. No commit.
+
+    A physical deck is exactly what's in it (D-041), so every change to its
+    cards calls this with the same quantity. At zero the line goes, and a
+    leader taken out leaves the deck without one.
+    """
+    row = conn.execute(
+        "SELECT quantity FROM deck_cards WHERE deck_id = ? AND base_card_id = ?",
+        (deck_id, base_card_id),
+    ).fetchone()
+    new = (row[0] if row else 0) + delta
+    if new > 0 and row:
+        conn.execute("UPDATE deck_cards SET quantity = ? WHERE deck_id = ? AND base_card_id = ?",
+                     (new, deck_id, base_card_id))
+    elif new > 0:
+        conn.execute("INSERT INTO deck_cards (deck_id, base_card_id, quantity) VALUES (?, ?, ?)",
+                     (deck_id, base_card_id, new))
+    else:
+        conn.execute("DELETE FROM deck_cards WHERE deck_id = ? AND base_card_id = ?",
+                     (deck_id, base_card_id))
+        conn.execute("UPDATE decks SET leader_id = NULL WHERE id = ? AND leader_id = ?",
+                     (deck_id, base_card_id))
+    conn.execute("UPDATE decks SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (deck_id,))
+
+
+def take_any(
+    conn: sqlite3.Connection, base_card_id: str, quantity: int, container: Container
+) -> list[tuple[str | None, int]]:
+    """Withdraw copies whatever their art - unsorted first, then art by art. No commit.
+
+    For taking cards out of a deck when nobody said which art: the deck lists
+    the card, not a printing. Returns the (art, quantity) pieces taken.
+    """
+    slots = conn.execute(
+        "SELECT card_image_id, quantity FROM copies WHERE base_card_id = ? "
+        "AND location_id IS ? AND deck_id IS ? "
+        "ORDER BY (card_image_id IS NOT NULL), card_image_id",
+        (base_card_id, container.location_id, container.deck_id),
+    ).fetchall()
+    if sum(q for _, q in slots) < quantity:
+        _withdraw(conn, base_card_id, None, container, quantity)  # raises, with where they are
+    taken, left = [], quantity
+    for art, have in slots:
+        if not left:
+            break
+        piece = min(have, left)
+        _withdraw(conn, base_card_id, art, container, piece)
+        taken.append((art, piece))
+        left -= piece
+    return taken
+
+
+# --------------------------------------------------------------------------
 # commands
 # --------------------------------------------------------------------------
 
@@ -314,8 +385,15 @@ def add(
     _require_base_card(conn, base_card_id)
     art_id = resolve_art(conn, base_card_id, art)
     container = to or loose_container(conn)
-    _deposit(conn, base_card_id, art_id, container, quantity)
-    conn.commit()
+    _refuse_wishlist(conn, container)
+    try:
+        _deposit(conn, base_card_id, art_id, container, quantity)
+        if container.deck_id is not None:
+            adjust_recipe(conn, container.deck_id, base_card_id, quantity)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     return total_owned(conn, base_card_id)
 
 
@@ -335,8 +413,14 @@ def remove(
     _require_base_card(conn, base_card_id)
     art_id = resolve_art(conn, base_card_id, art)
     container = frm or loose_container(conn)
-    _withdraw(conn, base_card_id, art_id, container, quantity)
-    conn.commit()
+    try:
+        _withdraw(conn, base_card_id, art_id, container, quantity)
+        if container.deck_id is not None:
+            adjust_recipe(conn, container.deck_id, base_card_id, -quantity)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     return total_owned(conn, base_card_id)
 
 
@@ -350,17 +434,23 @@ def move(
 ) -> int:
     """Move copies between containers. Returns the quantity now at the destination.
 
-    Loaning a card is this: a move into a location of kind 'loan'. The copy is
-    still owned, it's just somewhere else.
+    Loaning a card is this: a move into a place of type 'loan'. The copy is
+    still owned, it's just somewhere else. Moving into or out of a physical
+    deck changes the deck's list too - the deck is what's in it (D-041).
     """
     _check_quantity(quantity)
     _require_base_card(conn, base_card_id)
     if frm == to:
         raise CollectionError(f"{frm.name} is both the source and the destination")
+    _refuse_wishlist(conn, to)
     art_id = resolve_art(conn, base_card_id, art)
     try:
-        _withdraw(conn, base_card_id, art_id, frm, quantity)
+        _withdraw(conn, base_card_id, art_id, frm, quantity, going_to=to)
         _deposit(conn, base_card_id, art_id, to, quantity)
+        if frm.deck_id is not None:
+            adjust_recipe(conn, frm.deck_id, base_card_id, -quantity)
+        if to.deck_id is not None:
+            adjust_recipe(conn, to.deck_id, base_card_id, quantity)
         conn.commit()
     except Exception:
         conn.rollback()

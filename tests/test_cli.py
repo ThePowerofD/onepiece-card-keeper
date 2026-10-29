@@ -145,7 +145,7 @@ class DeckCommandTests(CliTestCase):
 
         code, out, _ = self.run_cli("deck", "show", "Red")
         self.assertEqual(code, 0)
-        self.assertIn("complete", out)
+        self.assertIn("[physical]  51 cards", out)
         self.assertIn(LEADER, out)
 
     def test_show_wishlist_reports_missing(self):
@@ -164,11 +164,13 @@ class DeckCommandTests(CliTestCase):
         self.assertEqual(code, 0)
         self.assertIn("back to just-loose", out)
 
-    def test_set_physical_warns(self):
+    def test_set_physical_refuses_a_wishlist_with_cards_listed(self):
+        """D-041: a physical deck is exactly what's in it - it can't start empty."""
         self.run_cli("deck", "import", str(self.decklist), "--name", "Wish", "--wishlist")
-        code, out, _ = self.run_cli("deck", "set-physical", "Wish")
-        self.assertEqual(code, 0)
-        self.assertIn("warning:", out)
+        code, _, err = self.run_cli("deck", "set-physical", "Wish")
+        self.assertEqual(code, 1)
+        self.assertIn("can't become a physical deck", err)
+        self.assertIn("deck new", err)
 
     def test_set_physical_off(self):
         self.run_cli("deck", "import", str(self.decklist), "--name", "Red", "--physical")
@@ -418,12 +420,20 @@ class StorageCommandTests(CliTestCase):
         self.assertIn("Marco", out)
 
     def test_moving_copies_into_a_deck(self):
-        self.run_cli("deck", "import", str(self.decklist), "--name", "Red", "--wishlist")
+        self.run_cli("deck", "import", str(self.decklist), "--name", "Red")
         self.run_cli("collection", "add", "OP05-001", "1")
         code, out, _ = self.run_cli("collection", "move", "OP05-001", "1",
                                     "--to", "Red", "--to-type", "deck")
         self.assertEqual(code, 0)
         self.assertIn("-> Red", out)
+
+    def test_moving_copies_into_a_wishlist_deck_is_refused(self):
+        self.run_cli("deck", "import", str(self.decklist), "--name", "Wish", "--wishlist")
+        self.run_cli("collection", "add", "OP05-001", "1")
+        code, _, err = self.run_cli("collection", "move", "OP05-001", "1",
+                                    "--to", "Wish", "--to-type", "deck")
+        self.assertEqual(code, 1)
+        self.assertIn("is a wishlist deck", err)
 
 
 class CliEdgeTests(CliTestCase):
@@ -555,7 +565,7 @@ class ConfirmTests(CliTestCase):
             code, out, _ = self.run_cli("deck", "delete", "Red")
         self.assertEqual(code, 0)
         prompt.assert_called_once()
-        self.assertIn("51 sleeved copies go to just-loose", out)
+        self.assertIn("The 51 copies in it go to just-loose", out)
         self.assertEqual(self.deck_count(), 0)
 
     def test_anything_but_yes_cancels(self):
@@ -1154,4 +1164,80 @@ class UpgradeTests(unittest.TestCase):
         with redirect_stdout(out):
             main(["--db", str(self.db), "storage", "list"])
         self.assertNotIn("database upgraded", out.getvalue())
+
+
+class DeckEditCommandTests(CliTestCase):
+    """D-041: `deck add` / `deck remove` move real cards; the list follows."""
+
+    def setUp(self):
+        super().setUp()
+        self.run_cli("deck", "import", str(self.decklist), "--name", "Red")
+
+    def test_remove_then_show_says_the_deck_is_short(self):
+        code, out, _ = self.run_cli("deck", "remove", "Red", "OP05-001", "2")
+        self.assertEqual(code, 0)
+        self.assertIn("now runs 2", out)
+        self.assertIn("went to just-loose", out)
+        _, out, _ = self.run_cli("deck", "show", "Red")
+        self.assertIn("49 cards - a full deck is 50 plus the leader, this one has 48", out)
+
+    def test_a_full_deck_says_nothing_about_size(self):
+        _, out, _ = self.run_cli("deck", "show", "Red")
+        self.assertNotIn("a full deck is", out)
+
+    def test_add_takes_loose_cards_in(self):
+        self.run_cli("collection", "add", "OP05-013", "2")
+        code, out, _ = self.run_cli("deck", "add", "Red", "OP05-013", "2")
+        self.assertEqual(code, 0)
+        self.assertIn("now runs 4", out)
+
+    def test_add_names_where_the_cards_are_when_they_arent_loose(self):
+        self.run_cli("storage", "add", "Binder A", "--type", "binder")
+        self.run_cli("collection", "add", "OP05-013", "2", "--to", "Binder A")
+        code, _, err = self.run_cli("deck", "add", "Red", "OP05-013", "2")
+        self.assertEqual(code, 1)
+        self.assertIn('add --from "Binder A"', err)
+        code, _, _ = self.run_cli("deck", "add", "Red", "OP05-013", "2", "--from", "Binder A")
+        self.assertEqual(code, 0)
+
+    def test_moving_cards_to_another_deck(self):
+        self.run_cli("deck", "new", "Blue")
+        code, _, _ = self.run_cli("deck", "remove", "Red", "OP05-001", "2", "--to", "Blue")
+        self.assertEqual(code, 0)
+        _, out, _ = self.run_cli("deck", "show", "Blue")
+        self.assertIn("OP05-001", out)
+        self.assertIn("2 cards", out)
+
+    def test_remove_to_a_new_place_offers_to_create_it(self):
+        with mock.patch("builtins.input", side_effect=["n", "1"]):  # create, as a binder
+            code, out, _ = self.run_cli("deck", "remove", "Red", "OP05-001", "1", "--to", "Binder Z")
+        self.assertEqual(code, 0)
+        self.assertIn("created binder 'Binder Z'", out)
+
+    def test_cards_can_be_named(self):
+        with mock.patch("builtins.input", return_value="1"):
+            code, out, _ = self.run_cli("deck", "remove", "Red", "card 1", "1")
+        self.assertEqual(code, 0)
+        self.assertIn("OP05-001", out)
+
+    def test_deck_new(self):
+        code, out, _ = self.run_cli("deck", "new", "Enel")
+        self.assertEqual(code, 0)
+        self.assertIn("created empty physical deck 'Enel'", out)
+        _, out, _ = self.run_cli("deck", "show", "Enel")
+        self.assertIn("0 cards", out)
+
+    def test_deck_new_refuses_a_taken_name(self):
+        code, _, err = self.run_cli("deck", "new", "Red")
+        self.assertEqual(code, 1)
+        self.assertIn("already exists", err)
+
+    def test_replace_says_what_it_took_out(self):
+        lines = self.decklist.read_text(encoding="utf-8").splitlines()
+        shorter = Path(self.tmp.name) / "shorter.txt"
+        shorter.write_text("\n".join(l for l in lines if "OP05-002" not in l) + "\n",
+                           encoding="utf-8")
+        _, out, _ = self.run_cli("deck", "import", str(shorter), "--name", "Red",
+                                 "--on-conflict", "replace")
+        self.assertIn("taken out:     4 copies", out)
 
