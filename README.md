@@ -111,11 +111,12 @@ touched.
 
 **Last updated: 2026-10-29 — Phase 2, M0 under way: real cards are going in.**
 
-The card database is built, and the full collection/deck CLI works: import
-decklists (Limitless or deckbuilder-export format, from a file or pasted in),
-track what you own and which art, record where every copy is, and see what's
-missing for a deck you want to build. `optcg shell` makes entering
-a lot at once quick.
+The card database is built, and the CLI covers the whole loop: import decklists
+(Limitless or deckbuilder-export, from a file or pasted in), track what you own
+and which art, keep cards in storage places of your own types, edit decks card
+by card, and see what's missing for a deck you want to build. It's one command,
+`optcg`, which opens a shell; cards can be named instead of typed by id, and
+every error says what to type next (D-036 to D-042).
 
 **Real data has started.** The first real deck, Reiju, is in: 51 copies of 18
 cards, arts not yet sorted. From here the database holds data that exists
@@ -162,7 +163,7 @@ pip install -e ".[dev]"               # the optcg command, plus pytest
 optcg setup                           # schema + card types + every card (never resets)
 
 python -m pytest tests/ -v
-python -m pytest tests/ --cov=optcg --cov-report=term-missing   # coverage (99%)
+python -m pytest tests/ --cov=optcg --cov-report=term-missing   # coverage (97%)
 ```
 
 **Verify it worked.** You should see:
