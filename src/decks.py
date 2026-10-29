@@ -20,6 +20,7 @@ import sqlite3
 from pathlib import Path
 from typing import NamedTuple
 
+from src.backup import auto_snapshot
 from src.collection import committed_elsewhere, deposit, empty_container, total_owned
 from src.deck_parser import parse_decklist
 from src.resolve import unknown_ids
@@ -142,6 +143,7 @@ def import_decklist(
             raise DeckNameExists(clean_name, existing_id)
         if on_conflict == "replace":
             replaced = True
+            auto_snapshot(conn, "before-deck-replace")
 
     credited = 0
     try:
@@ -380,11 +382,14 @@ class DeckDeletion(NamedTuple):
 def delete_deck(conn: sqlite3.Connection, ref: str | int) -> DeckDeletion:
     """Delete a deck. Its sleeved copies go back to just-loose; `deck_cards` cascades.
 
+    Snapshots the database first (D-032): the recipe is gone for good.
+
     Unmaking a deck doesn't lose you cards — they return to the loose pile,
     which is also what makes stripping a deck to build another work (D-030).
     """
     deck_id = resolve_deck(conn, ref)
     name = conn.execute("SELECT name FROM decks WHERE id = ?", (deck_id,)).fetchone()[0]
+    auto_snapshot(conn, "before-deck-delete")
     try:
         returned = empty_container(conn, deck_container(conn, deck_id))
         conn.execute("DELETE FROM decks WHERE id = ?", (deck_id,))

@@ -30,7 +30,7 @@ Japanese cards, a distributable binary (D-023).
 |---|---|
 | Frontend | React + Vite, in a browser tab |
 | HTTP layer | FastAPI — JSON over `localhost`, wraps the modules below |
-| Logic | Python: `collection.py`, `decks.py`, `storage.py`, `resolve.py` |
+| Logic | Python: `collection.py`, `decks.py`, `storage.py`, `resolve.py`, `backup.py` |
 | Second frontend | `cli.py` — kept, not replaced (D-024) |
 | Database | SQLite |
 | Card data | OptcgAPI (`https://optcgapi.com`, override with `OPTCG_API_BASE`) |
@@ -405,6 +405,10 @@ OP17. Not a bug in this code.
 - **Idempotent sync.** Running it twice must not duplicate data.
 - **Pure sanitization.** `sanitize.py` never touches the DB.
 - **No DON cards.**
+- **Destroying data snapshots first.** Deleting a deck or location, replacing a
+  deck, importing an export and `--reset` copy the database to `data/backups/`
+  before writing (D-032). The snapshot lives in the module function, so every
+  caller gets it.
 
 ---
 
@@ -441,7 +445,8 @@ an `<img>` tag; only the *local cache* is still Phase 5 work.
 (availability form 3), "decks I could build with N more cards", trade tracking,
 win/loss and last-played per deck, deck tags/archetypes, format flag,
 trigger-text parsing for filterable search, DON!! cards, JP-exclusive cards,
-price history, multiple physical owners.
+price history, multiple physical owners, multi-machine sync (D-032 — the JSON
+export is the foundation; moving machines already works with it).
 
 **Hook exists:** local image cache (Phase 5), auto-detection of new sub-types
 (currently a manual `unknown_type_log` review), and foil-vs-non-foil for the

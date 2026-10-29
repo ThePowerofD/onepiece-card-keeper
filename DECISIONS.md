@@ -45,6 +45,7 @@ knowing why it's that way? If not, it doesn't need an entry.
 | [D-029](#d-029--the-api-reuses-printing-ids-sync-resolves-them) | **The API reuses printing ids; sync resolves them** | 2026-09-15 |
 | [D-030](#d-030--every-copy-is-somewhere-art-is-recorded-on-the-copy) | **Every copy is somewhere; art is recorded on the copy** | 2026-09-15 |
 | [D-031](#d-031--every-printing-of-a-card-agrees-on-its-gameplay-fields) | **Every printing of a card agrees on its gameplay fields** | 2026-09-15 |
+| [D-032](#d-032--two-backups-snapshots-for-undo-a-json-export-for-moving) | Two backups: snapshots for undo, JSON export for moving | 2026-10-29 |
 
 ---
 
@@ -1004,3 +1005,63 @@ replaces.
 
 Result on the current feed: 852 fields rewritten across 455 cards, and **zero
 variants left disagreeing with their base**.
+
+---
+
+## D-032 — Two backups: snapshots for undo, a JSON export for moving
+
+**2026-10-29** · *Protects the data D-030 made real; leaves [D-001](#d-001--sqlite--python--tauri)'s single local database in place*
+
+Card entry started on 2026-10-28 with nothing to recover it from but a manual
+file copy. `optcg.db` is gitignored, and half of it - decks, locations, copies -
+exists nowhere else: the API can rebuild `cards`, nothing can rebuild which
+binder a card is in. The owner wanted two things from a backup, and they pull in
+different directions, so there are two formats.
+
+**Snapshots are the safety net.** A full copy of the SQLite file, written with
+SQLite's backup API into `data/backups/`. They are taken **automatically** before
+every command that destroys data - `deck delete`, `location delete`, a deck
+import that replaces, `backup import`, and `db_setup --reset` - because the
+moment you need one is right after a command you didn't expect to go wrong,
+which is exactly when you won't have made one by hand. The newest 10 automatic
+ones are kept. Manual snapshots (`backup snapshot`, and the hand-made
+`optcg-...-pre-M0.db`) are never pruned: the prefix is what tells them apart, so
+**don't rename `auto-` files to keep them - copy them**.
+
+A snapshot is skipped when the database holds only the card catalog. That data
+is regenerable, and empty snapshots during a fresh setup would push out real
+ones. It is also taken *after* the target is resolved, so a typo in a deck name
+doesn't cost one of the ten slots.
+
+The snapshot is taken inside the module functions, not the CLI. The web layer
+will call `delete_deck` too, and should not have to remember the safety net.
+
+**The export is for moving machines.** A snapshot can technically be carried
+over, but it only fits code with the same schema, and the schema changed five
+times in September alone (D-025 to D-030). The export is JSON holding only the owner's data, and
+it names cards by printed id (`OP06-060`) and arts by printing id, never by row
+id - so it survives schema changes and loads anywhere after a sync. Copies are
+nested inside their container, which needs no ids to tie the two together and
+lets two decks share a name.
+
+**Import replaces; it never merges.** Merging means deciding whether this
+machine's "Reiju" is the file's "Reiju", and whether 4 + 4 Ichiji is 8 or 4.
+Every one of those rules is a guess that corrupts counts quietly when wrong.
+Replace is predictable - the machine ends up identical to the file - and the
+automatic snapshot plus a confirm prompt make it undoable. The whole file is
+validated before anything is deleted.
+
+Two things on import are kept rather than refused, because they are the owner's
+data and the API's gaps are not a reason to lose them: an **art the catalog
+doesn't know** (D-029 can re-identify a printing) becomes unsorted with a
+warning, and a **card id the catalog doesn't know** (OP17, before the API has
+it) is kept as-is with a warning. An **empty catalog** is refused outright -
+it means the sync hasn't run, and every art would be dropped.
+
+**Multi-machine sync was considered and deferred.** Keeping two machines in
+step needs conflict rules - the laptop added cards while the desktop deleted
+the deck - which is a server or a merge system, and DESIGN.md's "one machine"
+goal. Nobody uses two machines yet. If that changes, the cheap steps are the
+export kept in a private git repo (history and visible conflicts for free), or
+the `.db` in a synced folder with one machine open at a time. Either way the
+export is the foundation, which is why it names nothing by internal id.

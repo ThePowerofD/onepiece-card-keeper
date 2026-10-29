@@ -32,7 +32,7 @@ as UI instead of terminal tables. See **D-024** for the reasoning.
 | Unique gameplay cards (`base_card_id`) | 2,648 |
 | Sets covered | OP01–OP16, EB01–EB04, ST01–ST30, PRB01–02, promos |
 | Bad rows in logs | none |
-| Tests | 341 passing |
+| Tests | 492 passing |
 
 **Known limitation:** OptcgAPI lags the real game. The game is out to **OP17**;
 the API only has **OP16**. Re-run the sync when it catches up — no code change
@@ -52,7 +52,8 @@ From a fresh clone to a working database:
 venv\Scripts\activate                 # Windows; source venv/bin/activate elsewhere
 pip install -r requirements.txt -r requirements-dev.txt
 
-python -m src.db_setup --reset        # create the schema (drops any existing DB)
+python -m src.db_setup --reset        # create the schema (drops any existing DB,
+                                      # after snapshotting your data if it has any)
 python -m src.known_types             # seed the card-type vocabulary
 python -m src.sync                    # fetch all cards from OptcgAPI
 
@@ -72,7 +73,7 @@ python -m pytest tests/ --cov=src --cov-report=term-missing   # coverage (99%)
   cards table count:  4338
 ```
 
-...and 341 passing tests. Anything else means something changed upstream —
+...and 492 passing tests. Anything else means something changed upstream —
 `Unknown sub_types` above 0 usually means a new set introduced a card type;
 add it to `SEED_TYPES` in `src/known_types.py` and re-sync.
 
@@ -80,7 +81,9 @@ Add `--use-cache` to `python -m src.sync` to reuse the saved JSON in
 `data/cache/` instead of hitting the API. Handy while developing; delete the
 cache files to force a fresh fetch.
 
-`data/optcg.db` is gitignored and always regenerable by the three commands above.
+`data/optcg.db` is gitignored. The **card catalog** in it is regenerable by the
+three commands above; **your decks, locations and copies are not** — they exist
+nowhere else. See [Backups](#backups).
 
 ---
 
@@ -134,6 +137,12 @@ python -m src.cli location delete "OP13 Storage" # copies return to just-loose
 
 # Loans — the card is still yours, it's just somewhere else
 python -m src.cli loan OP05-097 1 "Friend 1" --art p1
+
+# Backups — see below
+python -m src.cli backup export my_collection.json
+python -m src.cli backup import my_collection.json   # REPLACES what's here; asks first
+python -m src.cli backup snapshot --label before-sorting
+python -m src.cli backup list
 ```
 
 **Names are unique per kind, not globally** — a box and a binder can both be
@@ -168,6 +177,24 @@ wishlist deck holds no copies and just reports what you're missing.
 **Nothing goes negative.** Moving or removing more than a container holds is an
 error that writes nothing, and tells you what's actually there.
 
+### Backups
+
+Two kinds, for two jobs (D-032):
+
+- **Snapshots — undo on this machine.** A full copy of the database in
+  `data/backups/`. Taken **automatically** before `deck delete`,
+  `location delete`, a deck import that replaces, `backup import` and
+  `db_setup --reset`; the newest 10 automatic ones are kept. Ones you make with
+  `backup snapshot` are never deleted. **To undo**, close the app and copy the
+  snapshot over `data/optcg.db`.
+- **Export — moving to another machine.** A JSON file of your decks, locations
+  and copies only. It names cards by their printed ids, so it still loads after
+  code updates. On the new machine: clone, set up, **sync first**, then
+  `backup import my_collection.json`. Import **replaces** everything there — it
+  never merges — after a snapshot and a confirmation.
+
+`data/backups/` is gitignored: it's your data, not code.
+
 ### First run, in this order
 
 You can't move a card you don't own yet, and you own nothing until a deck import
@@ -198,9 +225,10 @@ src/
   collection.py   what you own, with the availability guard
   storage.py      storage locations and placements
   decks.py        deck import and management
+  backup.py       snapshots, and JSON export/import of your own data
   cli.py          argparse entry point over all of the above
-tests/            341 tests
-data/             optcg.db and cache/ (both gitignored)
+tests/            492 tests
+data/             optcg.db, cache/ and backups/ (all gitignored)
 ```
 
 ---

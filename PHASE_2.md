@@ -39,6 +39,10 @@ python -m src.cli location add "Binder A" --notes "red decks"
 Import every deck that's currently sleeved. Each one credits the collection as a
 side effect (D-011), so this is also the cheapest bulk entry that exists.
 
+Once there's real data, `python -m src.cli backup export` after a session of
+entry is the copy that survives anything (D-032). Destructive commands already
+snapshot by themselves.
+
 **Watch for, and report rather than fix quietly:**
 
 - The wrong printing credited — import assumes the plain art (D-016). Expected,

@@ -229,13 +229,16 @@ def delete_location(conn: sqlite3.Connection, name: str, kind: str | None = None
 
     Returns how many copies were moved. The foreign key has no cascade for
     exactly this reason — deleting a binder must never destroy the cards in it.
+    Snapshots the database first (D-032).
     """
     _refuse_if_builtin(name, "deleted")
     container = resolve_container(conn, name, kind, allow_deck=False)
-    # Imported here, not at module scope: collection imports this module for
-    # Container and the loose pile, so a top-level import would be circular.
+    # Imported here, not at module scope: collection and backup both import
+    # this module, so a top-level import would be circular.
+    from src.backup import auto_snapshot
     from src.collection import empty_container
 
+    auto_snapshot(conn, "before-location-delete")
     try:
         moved = empty_container(conn, container)
         conn.execute("DELETE FROM storage_locations WHERE id = ?", (container.location_id,))

@@ -3,6 +3,9 @@
 Run:
     python -m src.db_setup            # create if missing (idempotent)
     python -m src.db_setup --reset    # drop everything and recreate
+
+--reset snapshots the database into data/backups/ first whenever it holds
+decks, copies or locations (D-032).
 """
 
 from __future__ import annotations
@@ -244,6 +247,12 @@ def main() -> None:
     conn = connect(args.db)
     try:
         if args.reset:
+            # Imported here: backup imports this module for the loose pile's name.
+            from src.backup import auto_snapshot
+
+            saved = auto_snapshot(conn, "before-reset")
+            if saved:
+                print(f"Saved your decks and collection to {saved}")
             print(f"Dropping existing tables in {args.db}...")
             drop_all(conn)
         print(f"Creating schema in {args.db}...")

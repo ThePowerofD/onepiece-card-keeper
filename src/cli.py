@@ -9,6 +9,8 @@
     python -m src.cli collection show OP05-097
     python -m src.cli location show "Binder A"
     python -m src.cli loan OP05-097 1 "Marco"
+    python -m src.cli backup export                           # JSON, to move machines
+    python -m src.cli backup import my_collection.json        # replaces what's here
     python -m src.cli shell                                   # optcg> prompt, no prefix
 
 Every command takes --db to point at a different SQLite file.
@@ -22,8 +24,10 @@ import sqlite3
 import sys
 from pathlib import Path
 
+from src import backup
 from src import collection as coll
 from src import storage as store
+from src.backup import BackupError
 from src.collection import CollectionError
 from src.db_setup import DB_PATH, connect
 from src.decks import (
@@ -326,7 +330,70 @@ def cmd_location_show(conn: sqlite3.Connection, args) -> int:
 
 
 # --------------------------------------------------------------------------
-# wiring
+# backup
+# --------------------------------------------------------------------------
+
+def _size(n: int) -> str:
+    return f"{n / 1_048_576:.1f} MB" if n >= 1_048_576 else f"{n / 1024:.0f} KB"
+
+
+def cmd_backup_snapshot(conn: sqlite3.Connection, args) -> int:
+    path = backup.snapshot(conn, args.label)
+    print(f"snapshot saved: {path}")
+    print("  manual snapshots are never deleted automatically")
+    return 0
+
+
+def cmd_backup_list(conn: sqlite3.Connection, args) -> int:
+    snapshots = backup.list_snapshots(conn)
+    if not snapshots:
+        print("no snapshots yet - `backup snapshot` makes one")
+        return 0
+    for s in snapshots:
+        kind = "auto" if s.automatic else "manual"
+        print(f"  {kind:<6} {_size(s.size_bytes):>8}  {s.path.name}")
+    print(f"\n  in {snapshots[0].path.parent}")
+    print(f"  the newest {backup.KEEP_AUTO_SNAPSHOTS} auto snapshots are kept; manual ones always")
+    print("  to undo, close the app and copy a snapshot over the database file")
+    return 0
+
+
+def cmd_backup_export(conn: sqlite3.Connection, args) -> int:
+    path = backup.write_export(conn, args.path)
+    counts = backup.current_counts(conn)
+    print(f"exported to {path}")
+    print(f"  {counts.decks} deck(s), {counts.locations} location(s), {counts.copies} copies")
+    return 0
+
+
+def cmd_backup_import(conn: sqlite3.Connection, args) -> int:
+    plan = backup.read_export(args.path)
+    when = f", exported {plan.exported_at}" if plan.exported_at else ""
+    print(f"{args.path}: {len(plan.decks)} deck(s), {plan.location_count} location(s), "
+          f"{plan.copy_total} copies{when}")
+
+    if not args.yes:
+        now = backup.current_counts(conn)
+        print(f"This REPLACES what is here now: {now.decks} deck(s), {now.locations} "
+              f"location(s), {now.copies} copies.")
+        print("A snapshot is taken first, so it can be undone.")
+        try:
+            answer = input("replace? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            print("error: cannot prompt here - re-run with --yes", file=sys.stderr)
+            return 1
+        if answer not in ("y", "yes"):
+            print("cancelled - nothing changed.")
+            return 1
+
+    result = backup.import_collection(conn, plan)
+    print(f"imported {result.decks} deck(s), {plan.location_count} location(s), "
+          f"{result.copies} copies")
+    warn(result.warnings)
+    return 0
+
+
 # --------------------------------------------------------------------------
 # shell
 # --------------------------------------------------------------------------
@@ -732,6 +799,57 @@ def build_parser() -> argparse.ArgumentParser:
                    help=f"{container_help} - {kind_note}")
     p.set_defaults(func=cmd_loan)
 
+    # ---- backup ---------------------------------------------------------
+    bak = _group(
+        sub, "backup", "snapshots for undo, export/import to move machines",
+        "Two kinds of backup. A snapshot is a full copy of the database, kept in\n"
+        "data/backups/ - deleting a deck or location, replacing a deck, importing\n"
+        f"and --reset all take one first (the newest {backup.KEEP_AUTO_SNAPSHOTS} are kept). "
+        "An export is a\n"
+        "JSON file of your decks, locations and copies only: it survives code\n"
+        "updates and loads on another machine after a sync.",
+        "backup export",
+        "backup import my_collection.json",
+        "backup snapshot --label before-sorting",
+    )
+
+    p = _command(
+        bak, "snapshot", "save a full copy of the database now",
+        "backup snapshot",
+        "backup snapshot --label before-sorting",
+        description="Save a full copy of the database to data/backups/. Snapshots you\n"
+                    "make yourself are never deleted automatically.",
+    )
+    p.add_argument("--label", default=None, help="a word or two added to the file name")
+    p.set_defaults(func=cmd_backup_snapshot)
+
+    p = _command(bak, "list", "list the snapshots in data/backups/", "backup list")
+    p.set_defaults(func=cmd_backup_list)
+
+    p = _command(
+        bak, "export", "write your decks, locations and copies to a JSON file",
+        "backup export",
+        "backup export E:\\my_collection.json",
+        description="Write your decks, locations and copies to a JSON file - what you\n"
+                    "own and where it is, not the card database (sync rebuilds that).",
+    )
+    p.add_argument("path", nargs="?", default=None,
+                   help="where to write it (default: a dated file in data/backups/)")
+    p.set_defaults(func=cmd_backup_export)
+
+    p = _command(
+        bak, "import", "replace your collection with one from an export",
+        "backup import my_collection.json",
+        "backup import my_collection.json --yes",
+        description="Load an export, REPLACING the decks, locations and copies here.\n"
+                    "Nothing is merged. A snapshot is taken first, and you are asked to\n"
+                    "confirm unless you pass --yes. Run the sync first on a new machine:\n"
+                    "arts can only be kept for printings the card database knows.",
+    )
+    p.add_argument("path", help="a file written by `backup export`")
+    p.add_argument("--yes", action="store_true", help="don't ask for confirmation")
+    p.set_defaults(func=cmd_backup_import)
+
     # ---- shell ----------------------------------------------------------
     _command(
         sub, "shell", "type commands one after another, without the prefix",
@@ -756,7 +874,7 @@ def main(argv: list[str] | None = None) -> int:
     conn = connect(args.db)
     try:
         return args.func(conn, args)
-    except (CollectionError, StorageError, DeckError) as exc:
+    except (CollectionError, StorageError, DeckError, BackupError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:

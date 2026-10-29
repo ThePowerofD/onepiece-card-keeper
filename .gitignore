@@ -42,3 +42,6 @@ htmlcov/
 
 # Personal decklists - your data, not code
 decklists/
+
+# Snapshots and collection exports - your data, not code
+data/backups/
