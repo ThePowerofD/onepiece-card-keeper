@@ -463,6 +463,59 @@ def show(conn: sqlite3.Connection, base_card_id: str) -> CardStatus | None:
     )
 
 
+class OwnedRow(NamedTuple):
+    base_card_id: str
+    card_image_id: str | None     # None = art not sorted yet
+    name: str
+    category: str
+    color: str | None
+    quantity: int
+
+
+def owned_rows(
+    conn: sqlite3.Connection,
+    set_code: str | None = None,
+    color: str | None = None,
+    category: str | None = None,
+    q: str | None = None,
+) -> list[OwnedRow]:
+    """What you own: one row per card and art, unsorted copies as their own row.
+
+    The collection view (D-039). Unlike `list_cards` it never shows a printing
+    you don't have - browsing the whole game is `list_cards`' job.
+    """
+    sql = [
+        "SELECT cp.base_card_id, cp.card_image_id, COALESCE(p.name, cp.base_card_id),",
+        "       COALESCE(p.category, ''), p.color, SUM(cp.quantity)",
+        "FROM copies cp",
+        # Unsorted copies are described by the card's base printing.
+        "LEFT JOIN cards p ON p.card_image_id = COALESCE(cp.card_image_id, cp.base_card_id)",
+        "WHERE 1=1",
+    ]
+    params: list = []
+    if set_code:
+        sql.append("AND (p.game_set = ? OR p.set_code = ? OR cp.base_card_id LIKE ?)")
+        params += [set_code, set_code, f"{set_code}-%"]
+    if color:
+        sql.append("AND p.color LIKE ?")
+        params.append(f"%{color}%")
+    if category:
+        sql.append("AND p.category = ?")
+        params.append(category)
+    if q:
+        # The same matching as `find`: words in any order, dots ignored.
+        from optcg.resolve import find_cards
+
+        ids = [m.base_card_id for m in find_cards(conn, q)]
+        if not ids:
+            return []
+        sql.append(f"AND cp.base_card_id IN ({','.join('?' * len(ids))})")
+        params += ids
+    sql.append("GROUP BY cp.base_card_id, cp.card_image_id "
+               "ORDER BY cp.base_card_id, (cp.card_image_id IS NOT NULL), cp.card_image_id")
+    return [OwnedRow(*row) for row in conn.execute(" ".join(sql), params)]
+
+
 def list_cards(
     conn: sqlite3.Connection,
     set_code: str | None = None,

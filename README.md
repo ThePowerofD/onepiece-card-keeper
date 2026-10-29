@@ -75,7 +75,7 @@ you named are in your deck, `optcg setup` when the database isn't set up yet.
 - **Container** — where a card physically is: a deck, or a location you create.
   Cards with nowhere named go to `just-loose`.
 
-**Seven commands cover almost everything:**
+**A handful of commands cover almost everything:**
 
 ```
 deck import mydeck.txt --name "Reiju"      a sleeved deck - its cards join your collection
@@ -83,6 +83,8 @@ deck show "Reiju"                          what you own vs what's missing
 collection add OP06-060 2                  loose cards you own
 collection show OP06-060                   how many, which arts, where they are
 find ichiji                                every card with that in its name, and what you own
+collection list                            everything you own
+browse --set OP17                          every card in the game, owned or not
 location add "Binder A" --kind binder      a place to keep cards
 collection move OP06-060 2 --to "Binder A"
 ```
@@ -131,7 +133,7 @@ as UI instead of terminal tables. See **D-024** for the reasoning.
 | Sets covered | OP01–OP17, EB01–EB04, ST01–ST36, PRB01–02, promos |
 | Bad rows in logs | none |
 | Owned so far | 51 copies, 1 deck |
-| Tests | 557 passing |
+| Tests | 563 passing |
 
 **Known limitation:** OptcgAPI lags the real game. It caught up to **OP17** by
 2026-10-29 (synced that day: 158 new OP17 printings, ST31–ST36, and three new
@@ -173,7 +175,7 @@ python -m pytest tests/ --cov=optcg --cov-report=term-missing   # coverage (99%)
   Stale printings:    0
 ```
 
-...and 557 passing tests. Anything else means something changed upstream —
+...and 563 passing tests. Anything else means something changed upstream —
 `Unknown sub_types` above 0 usually means a new set introduced a card type;
 add it to `SEED_TYPES` in `optcg/known_types.py` and re-sync. `Stale printings`
 above 0 means the API stopped sending some rows; they are kept, and if you own
@@ -228,8 +230,12 @@ optcg collection move OP05-097 4 --from "Red Luffy" --from-kind deck --to just-l
 optcg collection set-art OP05-097 1 p1 --in "Mewtwo Binder"
 optcg collection remove OP05-097 1               # sold or traded away
 optcg collection show OP05-097       # arts, containers, totals
-optcg collection list --set OP05 --owned-only
-optcg collection list --search "Luffy"
+optcg collection list                        # everything you own, card by card and art by art
+optcg collection list --set OP05 --search luffy
+
+# Browse — every card in the game, owned or not
+optcg browse --set OP17
+optcg browse --color Purple --category Leader
 
 # Storage — where the copies physically are.
 # Every location has a --kind: storage | binder | loose | loan
@@ -341,7 +347,7 @@ optcg/
   decks.py        deck import and management
   backup.py       snapshots, and JSON export/import of your own data
   cli.py          argparse entry point over all of the above
-tests/            557 tests
+tests/            563 tests
 data/             optcg.db, cache/ and backups/ (all gitignored)
 ```
 

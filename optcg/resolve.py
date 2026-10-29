@@ -35,6 +35,11 @@ class CardMatch(NamedTuple):
 _NUMBER_TAG = re.compile(r"\s*\((\d{3}|[A-Z]+\d*-\d{3})\)$")
 
 
+def display_name(name: str) -> str:
+    """A card name without the API's number tag: 'Vinsmoke Ichiji (060)' -> 'Vinsmoke Ichiji'."""
+    return _NUMBER_TAG.sub("", name)
+
+
 def _words(text: str) -> str:
     """Lowercase, dots and dashes as spaces: 'Monkey.D.Luffy' -> 'monkey d luffy'."""
     return " ".join(re.sub(r"[.\-_/]", " ", text.lower()).split())

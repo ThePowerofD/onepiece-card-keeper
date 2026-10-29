@@ -282,22 +282,64 @@ class CollectionCommandTests(CliTestCase):
         self.assertEqual(code, 1)
         self.assertIn("unknown card 'ZZ99-999'", err)
 
-    def test_list_filters(self):
+    def test_list_shows_what_you_own(self):
         self.run_cli("collection", "add", "OP05-001", "2")
-        code, out, _ = self.run_cli("collection", "list", "--owned-only")
+        code, out, _ = self.run_cli("collection", "list")
         self.assertEqual(code, 0)
         self.assertIn("OP05-001", out)
-        self.assertIn("2 printing(s)", out)      # base and its parallel
+        self.assertIn("(not sorted)", out)
+        self.assertIn("2 copies of 1 card(s)", out)
 
-    def test_list_by_category(self):
-        code, out, _ = self.run_cli("collection", "list", "--category", "Leader")
+    def test_list_never_shows_a_card_you_dont_own(self):
+        """D-039: the collection is what you have, not what exists."""
+        self.run_cli("collection", "add", "OP05-001", "2", "--art", "p1")
+        _, out, _ = self.run_cli("collection", "list")
+        self.assertNotIn("OP05-002", out)
+        self.assertNotIn(LEADER, out)
+        rows = [l for l in out.splitlines() if "OP05-001" in l]
+        self.assertEqual(len(rows), 1)  # the p1 copies only - not the base art
+        self.assertIn(" p1 ", rows[0])
+
+    def test_list_filters_within_what_you_own(self):
+        self.run_cli("deck", "import", str(self.decklist), "--name", "Red")
+        _, out, _ = self.run_cli("collection", "list", "--category", "Leader")
+        self.assertIn(LEADER, out)
+        self.assertIn("1 copies of 1 card(s)", out)
+        _, out, _ = self.run_cli("collection", "list", "--search", "card 12")
+        self.assertIn("OP05-012", out)
+        self.assertNotIn("OP05-011", out)
+
+    def test_an_empty_collection_says_how_to_fill_it(self):
+        _, out, _ = self.run_cli("collection", "list")
+        self.assertIn("your collection is empty", out)
+
+    def test_list_limit_says_what_it_hid(self):
+        self.run_cli("deck", "import", str(self.decklist), "--name", "Red")
+        _, out, _ = self.run_cli("collection", "list", "--limit", "3")
+        self.assertIn("showing 3 of 14 rows", out)
+
+    def test_browse_shows_every_card(self):
+        code, out, _ = self.run_cli("browse", "--category", "Leader")
+        self.assertEqual(code, 0)
         self.assertIn(LEADER, out)
         self.assertIn("1 printing(s)", out)
-
-    def test_list_by_name_search(self):
-        code, out, _ = self.run_cli("collection", "list", "--search", "Card 1 ")
-        self.assertEqual(code, 0)
+        _, out, _ = self.run_cli("browse", "--search", "Card 1 ")
         self.assertIn("Card 1", out)
+
+    def test_hidden_aliases_browse_but_stay_hidden(self):
+        for name in ("poneglyph", "logpose"):
+            code, out, _ = self.run_cli(name, "--category", "Leader")
+            self.assertEqual(code, 0)
+            self.assertIn(LEADER, out)
+        help_out = io.StringIO()
+        with redirect_stdout(help_out), self.assertRaises(SystemExit):
+            main(["--help"])
+        self.assertNotIn("poneglyph", help_out.getvalue())
+        err = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(err), self.assertRaises(SystemExit):
+            main(["--db", str(self.db), "ponglyph"])
+        self.assertNotIn("poneglyph", err.getvalue())
+        self.assertNotIn("logpose", err.getvalue())
 
 
 class StorageCommandTests(CliTestCase):
@@ -384,9 +426,12 @@ class StorageCommandTests(CliTestCase):
 
 class CliEdgeTests(CliTestCase):
     def test_list_with_no_matches(self):
-        code, out, _ = self.run_cli("collection", "list", "--set", "ZZ-99")
+        code, out, _ = self.run_cli("browse", "--set", "ZZ-99")
         self.assertEqual(code, 0)
         self.assertIn("no cards matched", out)
+        self.run_cli("collection", "add", "OP05-001", "1")
+        _, out, _ = self.run_cli("collection", "list", "--set", "ZZ-99")
+        self.assertIn("none of your cards match", out)
 
     def test_keyboard_interrupt_exits_cleanly(self):
         with mock.patch("optcg.cli.cmd_deck_list", side_effect=KeyboardInterrupt):
@@ -430,21 +475,21 @@ class ShellTests(CliTestCase):
         with mock.patch("builtins.input", side_effect=["exit", "collection add OP05-001 4"]):
             code, _, _ = self.run_cli("shell")
         self.assertEqual(code, 0)
-        _, out, _ = self.run_cli("collection", "list", "--owned-only")
+        _, out, _ = self.run_cli("collection", "list")
         self.assertNotIn("OP05-001", out)
 
     def test_bad_arguments_do_not_end_the_session(self):
         code, _, err = self.run_shell("collection add OP05-001", "collection add OP05-001 2")
         self.assertEqual(code, 0)
         self.assertIn("required", err)
-        _, out, _ = self.run_cli("collection", "list", "--owned-only")
+        _, out, _ = self.run_cli("collection", "list")
         self.assertIn("OP05-001", out)
 
     def test_command_errors_do_not_end_the_session(self):
         code, _, err = self.run_shell("collection remove OP05-001 1", "collection add OP05-002 1")
         self.assertEqual(code, 0)
         self.assertIn("error", err)
-        _, out, _ = self.run_cli("collection", "list", "--owned-only")
+        _, out, _ = self.run_cli("collection", "list")
         self.assertIn("OP05-002", out)
 
     def test_quoted_names_and_windows_paths(self):
@@ -464,7 +509,7 @@ class ShellTests(CliTestCase):
                         side_effect=[KeyboardInterrupt, "collection add OP05-001 1", EOFError]):
             code, _, _ = self.run_cli("shell")
         self.assertEqual(code, 0)
-        _, out, _ = self.run_cli("collection", "list", "--owned-only")
+        _, out, _ = self.run_cli("collection", "list")
         self.assertIn("OP05-001", out)
 
     def test_deck_paste_inside_the_shell(self):
@@ -902,10 +947,10 @@ class FriendlyErrorTests(CliTestCase):
             main(["--db", str(self.db), "shell"])
         self.assertIn("more help: help collection add", err.getvalue())
 
-    def test_list_notes_unsorted_copies_once_per_card(self):
+    def test_browse_notes_unsorted_copies_once_per_card(self):
         self.run_cli("collection", "add", "OP05-001", "3")
         self.run_cli("collection", "set-art", "OP05-001", "1", "p1")
-        _, out, _ = self.run_cli("collection", "list", "--set", "OP05")
+        _, out, _ = self.run_cli("browse", "--set", "OP05")
         lines = [l for l in out.splitlines() if "OP05-001" in l]
         self.assertEqual(len(lines), 2)  # the base printing and _p1
         self.assertIn("+ 2 of this card, art not sorted yet", lines[0])

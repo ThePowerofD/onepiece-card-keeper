@@ -52,6 +52,7 @@ knowing why it's that way? If not, it doesn't need an entry.
 | [D-036](#d-036--the-command-is-optcg-the-package-is-optcg) | The command is `optcg`; the package is `optcg` | 2026-10-29 |
 | [D-037](#d-037--cards-can-be-named-a-shared-name-asks-which) | Cards can be named; a shared name asks which | 2026-10-29 |
 | [D-038](#d-038--every-error-says-what-to-do-next) | Every error says what to do next | 2026-10-29 |
+| [D-039](#d-039--your-collection-is-what-you-own-browse-is-everything) | Your collection is what you own; `browse` is everything | 2026-10-29 |
 
 ---
 
@@ -1295,3 +1296,37 @@ its job. What was wrong was the wording: copies with no art recorded were
 reported on every printing of the card (`0 ... (4 owned, art not recorded)`, four
 times). They belong to the card, not to any printing, so they are now noted
 once, on the card's first row, and an art you own none of shows `-`.
+
+---
+
+## D-039 — Your collection is what you own; `browse` is everything
+
+**2026-10-29** · *Changes what `collection list` shows; keeps D-038's per-printing browser under a new name*
+
+`collection list` listed **every card in the game** - 4,712 printings, alphabetical,
+the first 50 - and only `--owned-only` narrowed it to yours. The owner opened it,
+saw Kouzuki Oden and Izo, and asked where those cards had come from. They hadn't
+come from anywhere; none of them were owned.
+
+**The collection shouldn't be subject to a flag** - the owner's words. Its point
+is exploring what you have. So:
+
+- **`collection list` shows only what you own**, one row per card and art, with
+  copies whose art isn't recorded as their own `(not sorted)` row. It never shows
+  a printing you don't have, not even another art of a card you do. Filters
+  (`--set`, `--color`, `--category`, `--search`) narrow *your* cards; `--search`
+  matches like `find`.
+- **`browse`** is the old view: every printing in the game with an `own` column
+  (D-038's wording fixes come with it). `find` stays the quick lookup by name.
+
+Names considered for the browser: `game` (sounded wrong), `catalog` (bland and
+ambiguous), `dex` (good, but not from the One Piece world), `library`, `cards`.
+`browse` won as plain and short. **`poneglyph` and `logpose` are hidden aliases**
+for it, an easter egg the owner asked for: they work exactly like `browse`, and
+are deliberately absent from help, from argparse's "choose from" list and from
+"did you mean" suggestions (`HIDDEN_COMMANDS` in `cli.py`). Don't "fix" them into
+the help.
+
+`collection.list_cards` keeps its `owned_only` parameter: Phase 2's card grid
+(`GET /api/cards`) is a browser with an owned filter, which is a different screen
+from the collection.

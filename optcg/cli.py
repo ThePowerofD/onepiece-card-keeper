@@ -397,8 +397,39 @@ def cmd_collection_show(conn: sqlite3.Connection, args) -> int:
 
 
 def cmd_collection_list(conn: sqlite3.Connection, args) -> int:
+    """What you own - never a card you don't have (D-039). `browse` is everything."""
+    rows = coll.owned_rows(conn, args.set, args.color, args.category, args.search)
+    if not rows:
+        filtered = any((args.set, args.color, args.category, args.search))
+        print("none of your cards match" if filtered else
+              "your collection is empty - `deck import` or `collection add` puts cards in")
+        return 0
+
+    shown = rows[:args.limit] if args.limit else rows
+    print(f"  {'card':<10} {'art':<16} {'own':>3}  {'category':<10} {'color':<12} name")
+    for r in shown:
+        if r.card_image_id is None:
+            art = "(not sorted)"
+        elif r.card_image_id == r.base_card_id:
+            art = "base"
+        else:
+            art = r.card_image_id[len(r.base_card_id) + 1:] or r.card_image_id
+        print(f"  {r.base_card_id:<10} {art:<16} {r.quantity:>3}  {r.category:<10} "
+              f"{r.color or '-':<12} {resolve.display_name(r.name)}")
+
+    copies = sum(r.quantity for r in rows)
+    cards = len({r.base_card_id for r in rows})
+    print(f"\n  {copies} copies of {cards} card(s)")
+    if len(shown) < len(rows):
+        print(f"  showing {len(shown)} of {len(rows)} rows - narrow it with a filter, "
+              f"or --limit {len(rows)}")
+    return 0
+
+
+def cmd_browse(conn: sqlite3.Connection, args) -> int:
+    """Every card in the game, with what you own of each printing (D-039)."""
     rows = coll.list_cards(
-        conn, args.set, args.color, args.category, args.owned_only, args.limit, args.search
+        conn, args.set, args.color, args.category, False, args.limit, args.search
     )
     if not rows:
         print("no cards matched")
@@ -649,6 +680,11 @@ _in_shell = False
 
 _INVALID_CHOICE = re.compile(r"invalid choice: '([^']*)' \(choose from (.*)\)")
 
+#: Aliases for `browse` that never appear in help, error messages or
+#: suggestions (D-039). Poneglyphs record the world's whole history; a Log Pose
+#: finds your way across it.
+HIDDEN_COMMANDS = ("poneglyph", "logpose")
+
 
 class Parser(argparse.ArgumentParser):
     """argparse, except a mistake shows that command's examples and where more help is.
@@ -657,11 +693,16 @@ class Parser(argparse.ArgumentParser):
     """
 
     def error(self, message: str):
+        typo = _INVALID_CHOICE.search(message)
+        choices = []
+        if typo:
+            choices = [c for c in re.findall(r"'([^']*)'", typo.group(2))
+                       if c not in HIDDEN_COMMANDS]
+            listed = ", ".join(f"'{c}'" for c in choices)
+            message = message.replace(typo.group(2), listed)
         self.print_usage(sys.stderr)
         print(f"error: {message}", file=sys.stderr)
-        typo = _INVALID_CHOICE.search(message)
         if typo:
-            choices = re.findall(r"'([^']*)'", typo.group(2))
             close = difflib.get_close_matches(typo.group(1), choices, n=1)
             if close:
                 print(f"  did you mean {close[0]!r}?", file=sys.stderr)
@@ -843,7 +884,7 @@ def build_parser() -> argparse.ArgumentParser:
         "(optional - copies start unsorted) and a container it sits in.",
         "collection add OP06-060 2",
         "collection show OP06-060",
-        "collection list --owned-only",
+        "collection list",
     )
 
     container_help = f"one of: {', '.join(store.CONTAINER_KINDS)}"
@@ -924,21 +965,47 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("base_card_id", help=ID_HELP)
     p.set_defaults(func=cmd_collection_show)
 
+    def card_filters(p, limit: int, limit_help: str) -> None:
+        p.add_argument("--set", help="set code, e.g. OP06")
+        p.add_argument("--color", help="e.g. Red, Blue")
+        p.add_argument("--category", help="Leader, Character, Event or Stage")
+        p.add_argument("--search", default=None, help="part of a card name")
+        p.add_argument("--limit", type=int, default=limit, help=limit_help)
+
     p = _command(
-        col, "list", "browse and search cards",
-        "collection list --owned-only",
-        "collection list --search Reiju",
-        "collection list --set OP06 --category Leader",
-        "collection list --color Blue --owned-only --limit 200",
-        description="Browse cards, owned or not. Filters combine.",
+        col, "list", "what you own: every card and art, with how many",
+        "collection list",
+        "collection list --set OP06",
+        "collection list --search ichiji",
+        "collection list --color Purple --category Character",
+        description="Everything you own, one row per card and art. Copies whose art you\n"
+                    "haven't recorded yet show as '(not sorted)'. Filters combine. To see\n"
+                    "cards you don't own, use `browse`.",
     )
-    p.add_argument("--set", help="set code, e.g. OP06")
-    p.add_argument("--color", help="e.g. Red, Blue")
-    p.add_argument("--category", help="Leader, Character, Event or Stage")
-    p.add_argument("--search", default=None, help="part of a card name")
-    p.add_argument("--owned-only", action="store_true", help="only cards you own")
-    p.add_argument("--limit", type=int, default=50, help="most rows to show (default: 50)")
+    card_filters(p, 100, "most rows to show (default: 100)")
     p.set_defaults(func=cmd_collection_list)
+
+    # ---- browse ---------------------------------------------------------
+    # Every card in the game, owned or not (D-039). 'poneglyph' and 'logpose'
+    # are hidden aliases - an easter egg the owner asked for. They are added
+    # without help text, so they never appear in a command list.
+    browse_description = (
+        "Every card in the game, one row per printing, with how many you own of\n"
+        "each. Filters combine. `collection list` shows only what you own."
+    )
+    p = _command(
+        sub, "browse", "every card in the game, owned or not",
+        "browse --set OP17",
+        "browse --color Purple --category Leader",
+        "browse --search luffy --limit 200",
+        description=browse_description,
+    )
+    card_filters(p, 50, "most rows to show (default: 50)")
+    p.set_defaults(func=cmd_browse)
+    for name in HIDDEN_COMMANDS:
+        p = sub.add_parser(name, description=browse_description, formatter_class=HELP_FORMAT)
+        card_filters(p, 50, "most rows to show (default: 50)")
+        p.set_defaults(func=cmd_browse)
 
     # ---- location -------------------------------------------------------
     loc = _group(
@@ -1177,7 +1244,7 @@ def not_ready(conn: sqlite3.Connection, args) -> str | None:
     if not {"cards", "copies", "decks", "storage_locations"} <= tables:
         return "the database isn't set up yet - run `optcg setup` first"
     needs_cards = getattr(args, "base_card_id", None) or args.func in (
-        cmd_find, cmd_deck_import, cmd_deck_paste, cmd_collection_list,
+        cmd_find, cmd_deck_import, cmd_deck_paste, cmd_browse,
     )
     if needs_cards and conn.execute("SELECT 1 FROM cards LIMIT 1").fetchone() is None:
         return "no cards downloaded yet - run `optcg sync`"

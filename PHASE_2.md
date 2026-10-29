@@ -57,7 +57,7 @@ printing) and D-019 (placement is optional) are all still untested guesses.
 Reversing one now is an afternoon; reversing it after 5,000 cards are entered is
 a migration. Build the UI against the real collection, not against fixtures.
 
-**Done when:** `collection list --owned-only` shows your actual cards, and every
+**Done when:** `collection list` shows your actual cards, and every
 sleeved deck appears in `deck list`.
 
 ---
