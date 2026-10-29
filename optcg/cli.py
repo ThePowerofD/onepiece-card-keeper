@@ -379,10 +379,19 @@ def cmd_collection_show(conn: sqlite3.Connection, args) -> int:
 
     unowned = [p for p in status.printings
                if p.card_image_id not in {a.card_image_id for a in status.arts}]
-    if unowned:
+    if status.unsorted and unowned:
+        # Unsorted copies are *some* printing, just not recorded - calling the
+        # rest "printings you don't own" would include the one they really are.
+        arts = ", ".join(p.printing_variant or "base" for p in unowned)
+        places = {h.container for h in status.holdings if h.card_image_id is None}
+        where = f'"{places.pop()}"' if len(places) == 1 else "<where they are>"
+        print(f"\n  your {status.unsorted} unsorted copies can be recorded as: {arts}")
+        print(f"  e.g. collection set-art {status.base_card_id} 1 "
+              f"{unowned[0].printing_variant or 'base'} --in {where}")
+    elif unowned:
         print(f"\n  {len(unowned)} other printing(s) exist that you don't own")
 
-    print(f"\n  committed {status.committed}   loose {status.loose}   "
+    print(f"\n  in decks {status.committed}   loose {status.loose}   "
           f"unsorted {status.unsorted}")
     return 0
 
@@ -565,7 +574,7 @@ def cmd_sync(conn: sqlite3.Connection, args) -> int:
 # --------------------------------------------------------------------------
 
 SHELL_BANNER = """optcg shell - type commands without the `optcg` prefix.
-  e.g.  collection add OP05-097 4      deck show "Red Luffy"
+  e.g.  find ichiji      collection add cosette 2      deck show "Reiju"
   help shows the guide, help deck shows the deck commands, exit leaves."""
 
 

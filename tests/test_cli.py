@@ -913,3 +913,19 @@ class FriendlyErrorTests(CliTestCase):
         self.assertIn(" 1 ", lines[1])  # one recorded as p1
         self.assertIn("printing", out.splitlines()[0])
 
+
+
+class ShowArtHintTests(CliTestCase):
+    def test_unsorted_copies_are_not_called_printings_you_dont_own(self):
+        """Found walking through a fresh clone: 4 unsorted Cosettes, one printing,
+        and show said '1 other printing(s) exist that you don't own'."""
+        self.run_cli("deck", "import", str(self.decklist), "--name", "Red")
+        _, out, _ = self.run_cli("collection", "show", "OP05-001")
+        self.assertNotIn("don't own", out)
+        self.assertIn("your 4 unsorted copies can be recorded as: base, p1", out)
+        self.assertIn('collection set-art OP05-001 1 base --in "Red"', out)
+
+    def test_once_sorted_the_other_arts_are_unowned(self):
+        self.run_cli("collection", "add", "OP05-001", "2", "--art", "base")
+        _, out, _ = self.run_cli("collection", "show", "OP05-001")
+        self.assertIn("1 other printing(s) exist that you don't own", out)
