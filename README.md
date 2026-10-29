@@ -33,16 +33,18 @@ as UI instead of terminal tables. See **D-024** for the reasoning.
 
 | | |
 |---|---|
-| Unique printings (`cards`) | 4,455 |
-| Unique gameplay cards (`base_card_id`) | 2,648 |
-| Sets covered | OP01–OP16, EB01–EB04, ST01–ST30, PRB01–02, promos |
+| Unique printings (`cards`) | 4,712 |
+| Unique gameplay cards (`base_card_id`) | 2,797 |
+| Sets covered | OP01–OP17, EB01–EB04, ST01–ST36, PRB01–02, promos |
 | Bad rows in logs | none |
 | Owned so far | 51 copies, 1 deck |
 | Tests | 519 passing |
 
-**Known limitation:** OptcgAPI lags the real game. The game is out to **OP17**;
-the API only has **OP16**. Re-run the sync when it catches up — no code change
-needed.
+**Known limitation:** OptcgAPI lags the real game. It caught up to **OP17** by
+2026-10-29 (synced that day: 158 new OP17 printings, ST31–ST36, and three new
+card types). When a newer set is out, its ids are missing until the API catches
+up — re-run the sync then. A new set usually needs new types in `SEED_TYPES`
+first; the sync summary says so.
 
 **Next up:** the rest of [PHASE_2.md](PHASE_2.md) M0 — import every sleeved
 deck. The safety work before bulk entry is done: backups (D-032), confirmations
@@ -72,12 +74,12 @@ python -m pytest tests/ --cov=src --cov-report=term-missing   # coverage (99%)
 
 ```
 === Sync summary ===
-  Total rows fetched: 4459
-  Inserted/updated:   4459
+  Total rows fetched: 4716
+  Inserted/updated:   4712
   Skipped (no id):    0
   Unknown sub_types:  0
   Field-shift repairs:3
-  cards table count:  4338
+  cards table count:  4712
   Stale printings:    0
 ```
 

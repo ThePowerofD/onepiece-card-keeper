@@ -59,6 +59,7 @@ SEED_TYPES: list[str] = [
     "Former Whitebeard Pirates",
     "Whitebeard Pirates Allies",
     "Red-Haired Pirates",
+    "Red-Haired Pirates Allies",  # OP17
     "Donquixote Pirates",
     "Buggy Pirates",
     "Buggy's Delivery",
@@ -84,6 +85,7 @@ SEED_TYPES: list[str] = [
     "New Giant Pirates",
     "New Giant Pirate Crew",
     "Giant Warrior Pirates",
+    "Giant Pirates",  # OP17 Dorry and Brogy, as the API spells it
     "Thriller Bark Pirates",
     "Rumbar Pirates",
     "Former Rumbar Pirates",
@@ -130,6 +132,7 @@ SEED_TYPES: list[str] = [
     "Wano Country",
     "Land of Wano",
     "Egghead",
+    "Elbaph",  # OP17
     "Elbaf",
     "Goa Kingdom",
     "Sorbet Kingdom",

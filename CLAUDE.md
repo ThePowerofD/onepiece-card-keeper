@@ -39,7 +39,8 @@ python -m pytest tests/test_sanitize.py::ToIntTests
   regenerable from the API; `collection`, `decks`, `storage_locations` and their
   child tables are the owner's real data and are **not**. Never `--reset` a
   database with rows in those tables without an explicit go-ahead.
-- The API lags the real game (ends at OP16; the game is at OP17). Not a bug.
+- The API lags the real game (it caught up to OP17 by 2026-10-29). Ids from a
+  newer set are missing until it catches up. Not a bug.
 - New card types appear with new sets. When `unknown_type_log` is non-empty after
   a sync, add them to `SEED_TYPES` in `src/known_types.py` and re-sync.
 - **Never delete stale printings** — rows the last sync didn't refresh (D-035).

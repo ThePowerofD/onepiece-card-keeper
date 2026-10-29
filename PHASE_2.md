@@ -48,7 +48,8 @@ physical import can't be cleanly undone with `deck delete` (D-034).
 
 - The wrong printing credited — import assumes the plain art (D-016). Expected,
   not a bug. Correct with `collection set`.
-- Unknown ids — cards from OP17, which the API doesn't have yet.
+- Unknown ids — cards from a set newer than the API. It has OP17 as of
+  2026-10-29, so these should now be rare.
 - 4-copy warnings — never blocking (D-004).
 
 **Why this comes before any code:** D-011 (decks-first), D-016 (credit the base
@@ -72,7 +73,7 @@ The milestone where it stops being a script.
 - **`image_url` in the SELECT** — it's on every `cards` row and currently unread.
 - **`q` — name search.** `LIKE %q%` on `c.name`.
 - **`offset`, and a total count.** It takes `limit` but has no pagination, and
-  4,338 cards will not arrive in one response.
+  4,712 printings will not arrive in one response.
 
 Keep it returning plain rows; the HTTP layer does the JSON shaping.
 

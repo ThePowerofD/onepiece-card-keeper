@@ -61,9 +61,10 @@ printing is sleeved, because in the game they're identical.
 
 ### Printing variants
 
-1,690 of the 4,338 printings carry a suffix, in three families: `_p1`–`_p8`
-(1,106, alternate printings), `_r1`–`_r3` (328, reprints), `_pr1`–`_pr9` (256,
-promos).
+1,915 of the 4,712 printings carry a suffix (2026-10-29), mostly in three
+families: `_p1`–`_p9` (1,174, alternate printings), `_r1`–`_r3` (389, reprints),
+`_pr1`–`_pr12` (256, promos). The other 96 are mostly ids synthesised from the
+card name by D-029.
 
 > **The number is an index, not a treatment.** `_p1` means "the first alternate
 > printing of this card" and nothing more — what it actually *is* varies:
@@ -277,8 +278,9 @@ flowchart LR
     E --> I[(card_types)]
 ```
 
-4,459 raw rows collapse to 4,338 unique printings — the same printing
-legitimately appears in more than one endpoint. Re-running must never duplicate.
+4,716 raw rows become 4,712 printings (2026-10-29): 4 are exact duplicates
+listed twice, and the 123 ids the API reuses for different cards are
+re-identified rather than collapsed (D-029). Re-running must never duplicate.
 
 **Sync never deletes from `cards`** (D-035). A printing the feed stops sending
 is *stale*: it is reported at the end of every sync — owned ones first, with
@@ -358,7 +360,7 @@ both true. Filter and compute rotation on `game_set`; `set_code` answers
 "which box did this come out of".
 
 **Printing kind is derived, not sent.** `printing_kind` classifies the variant
-suffix — `base` (2,648), `parallel` (1,150), `reprint` (338), `promo` (319) —
+suffix — `base` (2,797), `parallel` (1,211), `reprint` (385), `promo` (319) —
 so the alt-art axis is queryable instead of encoded in a string suffix. `pr` is
 tested before `p`, or every promo would read as a parallel.
 
@@ -399,8 +401,8 @@ Field names differ from what you'd guess — `FIELD_ALIASES` in `sync.py` maps t
 | `set_id` | → | `set_code` |
 | `card_image` | → | `image_url` |
 
-**The API lags the real game** — currently ends at OP16 while the game is at
-OP17. Not a bug in this code.
+**The API lags the real game** — it caught up to OP17 by 2026-10-29. Ids from a
+set newer than the feed are missing until it catches up. Not a bug in this code.
 
 ---
 
