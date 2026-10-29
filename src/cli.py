@@ -8,6 +8,7 @@
     python -m src.cli collection show OP05-097
     python -m src.cli location show "Binder A"
     python -m src.cli loan OP05-097 1 "Marco"
+    python -m src.cli shell                                   # optcg> prompt, no prefix
 
 Every command takes --db to point at a different SQLite file.
 """
@@ -15,6 +16,7 @@ Every command takes --db to point at a different SQLite file.
 from __future__ import annotations
 
 import argparse
+import shlex
 import sqlite3
 import sys
 from pathlib import Path
@@ -284,6 +286,70 @@ def cmd_location_show(conn: sqlite3.Connection, args) -> int:
 # --------------------------------------------------------------------------
 # wiring
 # --------------------------------------------------------------------------
+# shell
+# --------------------------------------------------------------------------
+
+SHELL_BANNER = """optcg shell - type commands without the `python -m src.cli` prefix.
+  e.g.  collection add OP05-097 4      deck show "Red Luffy"
+  help lists the commands, exit (or Ctrl+Z, Enter) leaves."""
+
+
+def split_command(line: str) -> list[str] | None:
+    """Split a shell line like a terminal would. None on an unclosed quote.
+
+    Backslash is not an escape character, so Windows paths such as
+    C:\decks\red.txt survive, and # is not a comment.
+    """
+    lexer = shlex.shlex(line, posix=True)
+    lexer.whitespace_split = True
+    lexer.escape = ""
+    lexer.commenters = ""
+    try:
+        return list(lexer)
+    except ValueError:
+        return None
+
+
+def run_shell(db: Path) -> int:
+    """Read commands until `exit`, running each one as its own CLI call.
+
+    Every line gets a fresh connection, so a line behaves exactly as it would
+    typed after `python -m src.cli` - same output, same errors, same commits.
+    """
+    print(SHELL_BANNER)
+    while True:
+        try:
+            line = input("optcg> ")
+        except EOFError:
+            print()
+            return 0
+        except KeyboardInterrupt:
+            print()
+            continue
+
+        argv = split_command(line)
+        if argv is None:
+            print("error: unclosed quote", file=sys.stderr)
+            continue
+        if not argv:
+            continue
+        if argv[0] in ("exit", "quit"):
+            return 0
+        if argv[0] == "shell":
+            print("already in the shell")
+            continue
+        if argv[0] == "help":
+            argv = ["--help"]
+
+        try:
+            main(["--db", str(db), *argv])
+        except SystemExit:
+            # argparse exits after --help and on bad arguments; it has already
+            # printed why, and one typo shouldn't end the session.
+            pass
+
+
+# --------------------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -427,6 +493,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--from-kind", choices=store.CONTAINER_KINDS, default=None)
     p.set_defaults(func=cmd_loan)
 
+    # ---- shell ----------------------------------------------------------
+    sub.add_parser("shell", help="type commands one after another, without the prefix")
+
     return parser
 
 
@@ -437,6 +506,9 @@ def main(argv: list[str] | None = None) -> int:
     if getattr(args, "physical", False) and getattr(args, "wishlist", False):
         print("error: --physical and --wishlist are mutually exclusive", file=sys.stderr)
         return 2
+
+    if args.group == "shell":
+        return run_shell(args.db)
 
     conn = connect(args.db)
     try:

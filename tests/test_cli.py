@@ -363,3 +363,63 @@ class CliEdgeTests(CliTestCase):
         code, out, _ = self.run_cli("deck", "show", "1")
         self.assertEqual(code, 0)
         self.assertIn("Red", out)
+
+
+class ShellTests(CliTestCase):
+    def run_shell(self, *lines) -> tuple[int, str, str]:
+        """Feed `lines` to the prompt, then end input as Ctrl+Z would."""
+        with mock.patch("builtins.input", side_effect=[*lines, EOFError]):
+            return self.run_cli("shell")
+
+    def test_runs_commands_until_end_of_input(self):
+        code, out, _ = self.run_shell("collection add OP05-001 4", "collection show OP05-001")
+        self.assertEqual(code, 0)
+        self.assertIn("optcg shell", out)
+        _, out, _ = self.run_cli("collection", "show", "OP05-001")
+        self.assertIn("4", out)
+
+    def test_exit_stops_reading(self):
+        with mock.patch("builtins.input", side_effect=["exit", "collection add OP05-001 4"]):
+            code, _, _ = self.run_cli("shell")
+        self.assertEqual(code, 0)
+        _, out, _ = self.run_cli("collection", "list", "--owned-only")
+        self.assertNotIn("OP05-001", out)
+
+    def test_bad_arguments_do_not_end_the_session(self):
+        code, _, err = self.run_shell("collection add OP05-001", "collection add OP05-001 2")
+        self.assertEqual(code, 0)
+        self.assertIn("required", err)
+        _, out, _ = self.run_cli("collection", "list", "--owned-only")
+        self.assertIn("OP05-001", out)
+
+    def test_command_errors_do_not_end_the_session(self):
+        code, _, err = self.run_shell("collection remove OP05-001 1", "collection add OP05-002 1")
+        self.assertEqual(code, 0)
+        self.assertIn("error", err)
+        _, out, _ = self.run_cli("collection", "list", "--owned-only")
+        self.assertIn("OP05-002", out)
+
+    def test_quoted_names_and_windows_paths(self):
+        windows_path = str(self.decklist).replace("/", "\\")
+        code, out, _ = self.run_shell(f'deck import {windows_path} --name "Red Luffy"')
+        self.assertEqual(code, 0)
+        self.assertIn("'Red Luffy'", out)
+
+    def test_help_blank_lines_and_unclosed_quotes(self):
+        code, out, err = self.run_shell("", "help", 'location add "Binder A')
+        self.assertEqual(code, 0)
+        self.assertIn("collection", out)
+        self.assertIn("unclosed quote", err)
+
+    def test_ctrl_c_cancels_the_line_not_the_shell(self):
+        with mock.patch("builtins.input",
+                        side_effect=[KeyboardInterrupt, "collection add OP05-001 1", EOFError]):
+            code, _, _ = self.run_cli("shell")
+        self.assertEqual(code, 0)
+        _, out, _ = self.run_cli("collection", "list", "--owned-only")
+        self.assertIn("OP05-001", out)
+
+    def test_nested_shell_is_refused(self):
+        code, out, _ = self.run_shell("shell")
+        self.assertEqual(code, 0)
+        self.assertIn("already in the shell", out)

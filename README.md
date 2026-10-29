@@ -88,6 +88,15 @@ cache files to force a fresh fetch.
 
 Everything runs through one entry point. `--help` works at every level.
 
+For entering a lot at once, `python -m src.cli shell` opens an `optcg>` prompt
+that takes the same commands without the prefix, until `exit`:
+
+```
+optcg> collection add OP05-097 4
+optcg> collection add OP05-020 3 --to "Binder A"
+optcg> exit
+```
+
 ```bash
 # Decks — importing a sleeved deck also credits your collection
 python -m src.cli deck import mydeck.txt --name "Red Luffy" --physical
