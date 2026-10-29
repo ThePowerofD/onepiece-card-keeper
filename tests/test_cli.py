@@ -475,6 +475,13 @@ class ShellTests(CliTestCase):
         self.assertEqual(code, 0)
         self.assertIn("created physical deck 'Red'", out)
 
+    def test_help_on_a_group_and_a_command(self):
+        code, out, _ = self.run_shell("help deck", "help collection set-art")
+        self.assertEqual(code, 0)
+        self.assertIn("paste", out)
+        self.assertIn("examples:", out)
+        self.assertIn("collection set-art OP06-042 1 p1", out)
+
     def test_nested_shell_is_refused(self):
         code, out, _ = self.run_shell("shell")
         self.assertEqual(code, 0)

@@ -97,6 +97,9 @@ optcg> collection add OP05-020 3 --to "Binder A"
 optcg> exit
 ```
 
+Inside the shell, `help` shows a getting-started guide, and `help deck` or
+`help deck import` shows a group or a single command with examples.
+
 ```bash
 # Decks — importing a sleeved deck also credits your collection
 python -m src.cli deck import mydeck.txt --name "Red Luffy" --physical

@@ -333,7 +333,7 @@ def cmd_location_show(conn: sqlite3.Connection, args) -> int:
 
 SHELL_BANNER = """optcg shell - type commands without the `python -m src.cli` prefix.
   e.g.  collection add OP05-097 4      deck show "Red Luffy"
-  help lists the commands, exit (or Ctrl+Z, Enter) leaves."""
+  help shows the guide, help deck shows the deck commands, exit leaves."""
 
 
 def split_command(line: str) -> list[str] | None:
@@ -381,7 +381,7 @@ def run_shell(db: Path) -> int:
             print("already in the shell")
             continue
         if argv[0] == "help":
-            argv = ["--help"]
+            argv = [*argv[1:], "--help"]  # "help deck import" -> "deck import --help"
 
         try:
             main(["--db", str(db), *argv])
@@ -392,158 +392,352 @@ def run_shell(db: Path) -> int:
 
 
 # --------------------------------------------------------------------------
+# help text
+# --------------------------------------------------------------------------
+
+# Keeps the line breaks in descriptions and examples instead of re-wrapping them.
+HELP_FORMAT = argparse.RawDescriptionHelpFormatter
+
+GUIDE = """\
+One Piece TCG collection and deck manager.
+
+how it fits together
+  card id     the gameplay id printed on the card, e.g. OP06-042. Commands
+              take this, not the name.
+  art         which printing a copy is: 'base', or a variant like p1. Optional -
+              copies start unsorted, and you can say which art later.
+  container   where copies physically are: a deck, or a location you create
+              (storage box, binder, loan). Cards with nowhere named go to
+              'just-loose'.
+
+getting started
+  deck import decklists\\Reiju_deck.txt --name "Reiju"
+      a sleeved deck - its cards join your collection, sitting in the deck
+  collection add OP06-060 2
+      loose cards you own
+  location add "Binder A" --kind binder
+  collection move OP06-060 2 --to "Binder A"
+  collection show OP06-060
+      how many you own, which arts, and where they are
+
+more help
+  help                    this page
+  help deck               the deck commands
+  help deck import        one command, with examples
+
+The examples are written the way you type them in the shell
+(python -m src.cli shell). Outside it, put 'python -m src.cli' in front:
+  python -m src.cli deck show "Reiju"
+"""
+
+ID_HELP = "card id, e.g. OP06-042"
+NAME_HELP = "put it in quotes if it has spaces"
+
+
+def _command(sub, name: str, summary: str, *examples: str, description: str | None = None):
+    """Add a subcommand whose --help says what it is for and shows it in use."""
+    epilog = None
+    if examples:
+        epilog = "examples:\n" + "\n".join(f"  {line}" for line in examples)
+    return sub.add_parser(
+        name,
+        help=summary,
+        description=description or summary,
+        epilog=epilog,
+        formatter_class=HELP_FORMAT,
+    )
+
+
+def _group(sub, name: str, summary: str, description: str, *examples: str):
+    """Add a command group (deck, collection, ...) and return its subcommands."""
+    parser = _command(sub, name, summary, *examples, description=description)
+    return parser.add_subparsers(
+        dest="action", required=True, title="commands", metavar="<command>"
+    )
+
+
+# --------------------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m src.cli",
-        description="One Piece TCG collection and deck manager.",
+        description=GUIDE,
+        formatter_class=HELP_FORMAT,
     )
     parser.add_argument("--db", type=Path, default=DB_PATH, help=f"SQLite file (default: {DB_PATH})")
-    sub = parser.add_subparsers(dest="group", required=True)
-
-    # ---- deck -----------------------------------------------------------
-    deck = sub.add_parser("deck", help="import and manage decks").add_subparsers(
-        dest="action", required=True
+    sub = parser.add_subparsers(
+        dest="group", required=True, title="command groups", metavar="<group>"
     )
 
-    p = deck.add_parser("import", help="import a Limitless decklist")
-    p.add_argument("path", help="decklist text file")
-    p.add_argument("--name", help="deck name (defaults to the filename)")
-    p.add_argument("--physical", action="store_true", help="a deck you have sleeved (default)")
-    p.add_argument("--wishlist", action="store_true", help="a deck you want to build")
-    p.add_argument("--on-conflict", choices=["replace", "new"], help="skip the prompt if the name exists")
+    # ---- deck -----------------------------------------------------------
+    deck = _group(
+        sub, "deck", "import and manage decks",
+        "Decks are lists of cards. A physical deck is one you have sleeved: importing\n"
+        "it adds its cards to your collection, located in the deck. A wishlist deck\n"
+        "is one you want to build: it only tells you what you're missing.",
+        'deck import decklists\\Reiju_deck.txt --name "Reiju"',
+        'deck show "Reiju"',
+        "deck list",
+    )
+
+    def deck_options(p) -> None:
+        p.add_argument("--physical", action="store_true", help="a deck you have sleeved (default)")
+        p.add_argument("--wishlist", action="store_true",
+                       help="a deck you want to build - your collection is untouched")
+        p.add_argument("--on-conflict", choices=["replace", "new"],
+                       help="if the name is taken: replace the old deck, or keep both. "
+                            "Without this you are asked")
+
+    p = _command(
+        deck, "import", "import a decklist from a text file",
+        'deck import decklists\\Reiju_deck.txt --name "Reiju"',
+        "deck import decklists\\Enel.txt --wishlist",
+        'deck import decklists\\Reiju_v2.txt --name "Reiju" --on-conflict replace',
+        description="Import a decklist from a text file. Both of these formats work:\n\n"
+                    "  Leader: 1 Vinsmoke Reiju OP06-042      Leader\n"
+                    "  Character:                             1 Vinsmoke Reiju (OP06-042)\n"
+                    "  4 Vinsmoke Ichiji OP06-060             Character (40)\n"
+                    "                                         4 Vinsmoke Ichiji (OP06-060)",
+    )
+    p.add_argument("path", help="the decklist file, e.g. decklists\\Reiju_deck.txt")
+    p.add_argument("--name", help="deck name (default: the file name)")
+    deck_options(p)
     p.set_defaults(func=cmd_deck_import)
 
-    p = deck.add_parser("paste", help=f"type or paste a decklist, ending with '{PASTE_END}'")
-    p.add_argument("--name", required=True, help="deck name")
-    p.add_argument("--physical", action="store_true", help="a deck you have sleeved (default)")
-    p.add_argument("--wishlist", action="store_true", help="a deck you want to build")
-    p.add_argument("--on-conflict", choices=["replace", "new"], help="skip the prompt if the name exists")
+    p = _command(
+        deck, "paste", "type or paste a decklist instead of using a file",
+        'deck paste --name "Reiju"',
+        'deck paste --name "Enel" --wishlist',
+        description="Type or paste a decklist straight into the terminal, then type\n"
+                    f"'{PASTE_END}' on its own line to import it. Blank lines are fine.",
+    )
+    p.add_argument("--name", required=True, help=f"deck name - {NAME_HELP}")
+    deck_options(p)
     p.set_defaults(func=cmd_deck_paste)
 
-    p = deck.add_parser("list", help="list all decks")
+    p = _command(deck, "list", "list all decks", "deck list")
     p.set_defaults(func=cmd_deck_list)
 
-    p = deck.add_parser("show", help="show a deck with owned vs missing")
-    p.add_argument("deck", help="deck name or id")
+    p = _command(
+        deck, "show", "show a deck: what you own and what you're missing",
+        'deck show "Reiju"',
+        "deck show 1",
+    )
+    p.add_argument("deck", help="deck name or id (the number in `deck list`)")
     p.set_defaults(func=cmd_deck_show)
 
-    p = deck.add_parser("delete", help="delete a deck (collection untouched)")
+    p = _command(
+        deck, "delete", "delete a deck - its copies go back to just-loose",
+        'deck delete "Reiju"',
+        description="Delete a deck. You still own its cards: the copies that were\n"
+                    "sleeved in it move to just-loose.",
+    )
     p.add_argument("deck", help="deck name or id")
     p.set_defaults(func=cmd_deck_delete)
 
-    p = deck.add_parser("set-physical", help="toggle whether a deck locks its cards")
+    p = _command(
+        deck, "set-physical", "mark a deck as sleeved, or back to a wishlist",
+        'deck set-physical "Enel"',
+        'deck set-physical "Enel" --off',
+    )
     p.add_argument("deck", help="deck name or id")
     p.add_argument("--off", action="store_true", help="make it a wishlist deck instead")
     p.set_defaults(func=cmd_deck_set_physical)
 
     # ---- collection -----------------------------------------------------
-    col = sub.add_parser("collection", help="track what you own").add_subparsers(
-        dest="action", required=True
+    col = _group(
+        sub, "collection", "track what you own",
+        "Your collection is every copy you own. Each copy has a card id, an art\n"
+        "(optional - copies start unsorted) and a container it sits in.",
+        "collection add OP06-060 2",
+        "collection show OP06-060",
+        "collection list --owned-only",
     )
 
     container_help = f"one of: {', '.join(store.CONTAINER_KINDS)}"
-    art_help = "printing: a full id (OP05-097_p1), a variant (p1), or 'base'"
+    kind_note = "only needed when two containers share a name"
+    art_help = "printing: a full id (OP06-042_p1), a variant (p1), or 'base'"
 
-    p = col.add_parser("add", help="record copies you now own")
-    p.add_argument("base_card_id", help="gameplay id, e.g. OP05-097")
+    p = _command(
+        col, "add", "record copies you now own",
+        "collection add OP06-060 2",
+        'collection add OP06-042 1 --art p1 --to "Binder A"',
+        description="Record copies you now own. They go to just-loose unless you name\n"
+                    "a container with --to.",
+    )
+    p.add_argument("base_card_id", help=ID_HELP)
     p.add_argument("quantity", type=int)
-    p.add_argument("--art", default=None, help=art_help + "; omit if not sorted yet")
+    p.add_argument("--art", default=None, help=art_help + "; leave out if you haven't sorted them")
     p.add_argument("--to", default=None, help="container (default: just-loose)")
-    p.add_argument("--kind", choices=store.CONTAINER_KINDS, default=None, help=container_help)
+    p.add_argument("--kind", choices=store.CONTAINER_KINDS, default=None,
+                   help=f"{container_help} - {kind_note}")
     p.set_defaults(func=cmd_collection_add)
 
-    p = col.add_parser("remove", help="copies leaving the collection - sold, traded, lost")
-    p.add_argument("base_card_id", help="gameplay id, e.g. OP05-097")
+    p = _command(
+        col, "remove", "copies leaving your collection - sold, traded, lost",
+        "collection remove OP06-060 1",
+        'collection remove OP06-042 1 --art p1 --from "Binder A"',
+    )
+    p.add_argument("base_card_id", help=ID_HELP)
     p.add_argument("quantity", type=int)
     p.add_argument("--art", default=None, help=art_help)
     p.add_argument("--from", default=None, help="container (default: just-loose)")
-    p.add_argument("--kind", choices=store.CONTAINER_KINDS, default=None, help=container_help)
+    p.add_argument("--kind", choices=store.CONTAINER_KINDS, default=None,
+                   help=f"{container_help} - {kind_note}")
     p.set_defaults(func=cmd_collection_remove)
 
-    p = col.add_parser("move", help="move copies between containers")
-    p.add_argument("base_card_id", help="gameplay id, e.g. OP05-097")
+    p = _command(
+        col, "move", "move copies from one container to another",
+        'collection move OP06-060 2 --to "Binder A"',
+        'collection move OP06-060 2 --from "Binder A" --to just-loose',
+        'collection move OP06-060 4 --from "Reiju" --to "Binder A"',
+        description="Move copies between containers. Moving more than the source holds is\n"
+                    "an error, and the message says what is actually there.",
+    )
+    p.add_argument("base_card_id", help=ID_HELP)
     p.add_argument("quantity", type=int)
     p.add_argument("--from", default=None, help="source (default: just-loose)")
     p.add_argument("--to", required=True, help="destination location or deck")
     p.add_argument("--art", default=None, help=art_help)
-    p.add_argument("--from-kind", choices=store.CONTAINER_KINDS, default=None, help=container_help)
-    p.add_argument("--to-kind", choices=store.CONTAINER_KINDS, default=None, help=container_help)
+    p.add_argument("--from-kind", choices=store.CONTAINER_KINDS, default=None,
+                   help=f"{container_help} - {kind_note}")
+    p.add_argument("--to-kind", choices=store.CONTAINER_KINDS, default=None,
+                   help=f"{container_help} - {kind_note}")
     p.set_defaults(func=cmd_collection_move)
 
-    p = col.add_parser("set-art", help="sort copies: say which printing some of them are")
-    p.add_argument("base_card_id", help="gameplay id, e.g. OP05-097")
+    p = _command(
+        col, "set-art", "say which printing some copies are",
+        'collection set-art OP06-042 1 p1 --in "Reiju"',
+        'collection set-art OP06-060 2 base --in "Binder A"',
+        'collection set-art OP06-042 1 base --from-art p1 --in "Reiju"',
+        description="Say which printing some of your copies are. Use it where the cards sit:\n"
+                    "name the container with --in. `collection show <card id>` lists the\n"
+                    "arts that exist.",
+    )
+    p.add_argument("base_card_id", help=ID_HELP)
     p.add_argument("quantity", type=int)
     p.add_argument("art", help=art_help)
     p.add_argument("--in", dest="location", default=None,
                    help="container holding them (default: just-loose)")
     p.add_argument("--from-art", default=None,
-                   help="re-sort copies already recorded as this art")
-    p.add_argument("--kind", choices=store.CONTAINER_KINDS, default=None, help=container_help)
+                   help="fix copies already recorded as this art")
+    p.add_argument("--kind", choices=store.CONTAINER_KINDS, default=None,
+                   help=f"{container_help} - {kind_note}")
     p.set_defaults(func=cmd_collection_set_art)
 
-    p = col.add_parser("show", help="one card: how many, which arts, where they are")
-    p.add_argument("base_card_id", help="gameplay id, e.g. OP05-097")
+    p = _command(
+        col, "show", "one card: how many you own, which arts, where they are",
+        "collection show OP06-042",
+    )
+    p.add_argument("base_card_id", help=ID_HELP)
     p.set_defaults(func=cmd_collection_show)
 
-    p = col.add_parser("list", help="browse cards")
-    p.add_argument("--set", help="set code, e.g. OP05")
-    p.add_argument("--color")
+    p = _command(
+        col, "list", "browse and search cards",
+        "collection list --owned-only",
+        "collection list --search Reiju",
+        "collection list --set OP06 --category Leader",
+        "collection list --color Blue --owned-only --limit 200",
+        description="Browse cards, owned or not. Filters combine.",
+    )
+    p.add_argument("--set", help="set code, e.g. OP06")
+    p.add_argument("--color", help="e.g. Red, Blue")
     p.add_argument("--category", help="Leader, Character, Event or Stage")
-    p.add_argument("--search", default=None, help="match part of a card name")
-    p.add_argument("--owned-only", action="store_true")
-    p.add_argument("--limit", type=int, default=50)
+    p.add_argument("--search", default=None, help="part of a card name")
+    p.add_argument("--owned-only", action="store_true", help="only cards you own")
+    p.add_argument("--limit", type=int, default=50, help="most rows to show (default: 50)")
     p.set_defaults(func=cmd_collection_list)
 
     # ---- location -------------------------------------------------------
-    loc = sub.add_parser("location", help="where loose cards are stored").add_subparsers(
-        dest="action", required=True
+    loc = _group(
+        sub, "location", "where cards are stored: boxes, binders, loans",
+        "Locations are places your copies sit outside a deck. Each has a kind:\n"
+        "storage, binder, loose or loan. 'just-loose' always exists.",
+        'location add "Binder A" --kind binder',
+        "location list",
+        'location show "Binder A"',
     )
 
     # A bare name can match more than one kind, so every command that resolves
     # a location takes --kind to disambiguate.
     kind_help = f"one of: {', '.join(store.LOCATION_KINDS)}"
 
-    p = loc.add_parser("add", help="create a storage location")
-    p.add_argument("name")
-    p.add_argument("--kind", choices=store.LOCATION_KINDS, default="storage", help=kind_help)
-    p.add_argument("--notes")
+    p = _command(
+        loc, "add", "create a location",
+        'location add "Binder A" --kind binder',
+        'location add "OP06 Box" --kind storage --notes "bulk"',
+        'location add "Marco" --kind loan',
+    )
+    p.add_argument("name", help=NAME_HELP)
+    p.add_argument("--kind", choices=store.LOCATION_KINDS, default="storage",
+                   help=f"{kind_help} (default: storage)")
+    p.add_argument("--notes", help="anything you want to remember about it")
     p.set_defaults(func=cmd_location_add)
 
-    p = loc.add_parser("list", help="list storage locations, grouped by kind")
-    p.add_argument("--kind", choices=store.LOCATION_KINDS, default=None, help=kind_help)
+    p = _command(
+        loc, "list", "list locations, grouped by kind",
+        "location list",
+        "location list --kind binder",
+    )
+    p.add_argument("--kind", choices=store.LOCATION_KINDS, default=None, help=f"only this kind: {kind_help}")
     p.set_defaults(func=cmd_location_list)
 
-    p = loc.add_parser("rename", help="rename a storage location")
+    p = _command(
+        loc, "rename", "rename a location",
+        'location rename "OP06 Box" "Germa Box"',
+    )
     p.add_argument("old")
     p.add_argument("new")
-    p.add_argument("--kind", choices=store.LOCATION_KINDS, default=None, help=kind_help)
+    p.add_argument("--kind", choices=store.LOCATION_KINDS, default=None,
+                   help=f"{kind_help} - {kind_note}")
     p.set_defaults(func=cmd_location_rename)
 
-    p = loc.add_parser("delete", help="delete a location (its copies return to just-loose)")
+    p = _command(
+        loc, "delete", "delete a location - its copies go back to just-loose",
+        'location delete "OP06 Box"',
+    )
     p.add_argument("name")
-    p.add_argument("--kind", choices=store.LOCATION_KINDS, default=None, help=kind_help)
+    p.add_argument("--kind", choices=store.LOCATION_KINDS, default=None,
+                   help=f"{kind_help} - {kind_note}")
     p.set_defaults(func=cmd_location_delete)
 
-    p = loc.add_parser("show", help="what's in a location or deck")
+    p = _command(
+        loc, "show", "what's inside a location or deck",
+        'location show "Binder A"',
+        'location show "Reiju"',
+        "location show",
+    )
     p.add_argument("name", nargs="?", default=None, help="default: just-loose")
     p.add_argument("--kind", choices=store.CONTAINER_KINDS, default=None,
                    help=f"one of: {', '.join(store.CONTAINER_KINDS)}")
-    p.add_argument("--limit", type=int, default=None)
+    p.add_argument("--limit", type=int, default=None, help="most rows to show")
     p.set_defaults(func=cmd_location_show)
 
     # ---- loans ----------------------------------------------------------
-    p = sub.add_parser("loan", help="lend copies to someone (you still own them)")
-    p.add_argument("base_card_id", help="gameplay id, e.g. OP05-097")
+    p = _command(
+        sub, "loan", "lend copies to someone - you still own them",
+        'location add "Marco" --kind loan',
+        'loan OP06-042 1 "Marco"',
+        'collection move OP06-042 1 --from "Marco" --to just-loose',
+        description="Lend copies to someone. They stay in your collection, located with\n"
+                    "that person. Create the person first as a location of kind 'loan';\n"
+                    "when the cards come back, move them out again.",
+    )
+    p.add_argument("base_card_id", help=ID_HELP)
     p.add_argument("quantity", type=int)
-    p.add_argument("to_whom", help="a location of kind 'loan' - create it with `location add`")
+    p.add_argument("to_whom", help="a location of kind 'loan'")
     p.add_argument("--art", default=None, help="which printing is going out")
     p.add_argument("--from", default=None, help="source (default: just-loose)")
-    p.add_argument("--from-kind", choices=store.CONTAINER_KINDS, default=None)
+    p.add_argument("--from-kind", choices=store.CONTAINER_KINDS, default=None,
+                   help=f"{container_help} - {kind_note}")
     p.set_defaults(func=cmd_loan)
 
     # ---- shell ----------------------------------------------------------
-    sub.add_parser("shell", help="type commands one after another, without the prefix")
+    _command(
+        sub, "shell", "type commands one after another, without the prefix",
+        description="Open an optcg> prompt. Type commands without 'python -m src.cli'\n"
+                    "in front; 'help' shows the guide, 'exit' leaves.",
+    )
 
     return parser
 
