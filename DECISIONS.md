@@ -47,6 +47,7 @@ knowing why it's that way? If not, it doesn't need an entry.
 | [D-031](#d-031--every-printing-of-a-card-agrees-on-its-gameplay-fields) | **Every printing of a card agrees on its gameplay fields** | 2026-09-15 |
 | [D-032](#d-032--two-backups-snapshots-for-undo-a-json-export-for-moving) | Two backups: snapshots for undo, JSON export for moving | 2026-10-29 |
 | [D-033](#d-033--hosting-moves-from-never-to-later) | Hosting moves from never to later | 2026-10-29 |
+| [D-034](#d-034--ask-only-when-something-is-lost-dry-run-only-on-imports) | Ask only when something is lost; dry-run only on imports | 2026-10-29 |
 
 ---
 
@@ -1087,3 +1088,51 @@ auth - a login in front of the owner's own data, not accounts - so auth leaves
 the "Never" list with it. What keeps the door open cheaply is what is already
 true: the logic modules don't present (DESIGN.md section 2), so FastAPI can serve
 them from anywhere, and the export names nothing by internal id.
+
+---
+
+## D-034 — Ask only when something is lost; dry-run only on imports
+
+**2026-10-29** · *Builds on [D-032](#d-032--two-backups-snapshots-for-undo-a-json-export-for-moving)*
+
+The plan from September was a confirmation prompt on every irreversible command
+and a `--dry-run` on everything. It was written before snapshots existed. Once
+every destructive command snapshots first (D-032), nothing is irreversible any
+more, so both were re-decided against what is still actually at risk.
+
+**Prompts appear only when something would be lost.** A snapshot fixes a
+mistake after it happens, by closing the app and copying a file back; a prompt
+that says *"Binder A holds 120 copies"* stops it before, which is cheaper. But
+a prompt that appears every time gets answered `y` without being read, so:
+
+- `location delete` asks only when the location holds copies. An empty one has
+  nothing to lose. Losing *which binder a card was in* is the expensive
+  mistake: it is sorting work redone by hand.
+- `deck delete` always asks: every deck has a recipe.
+- A deck import that replaces keeps the `[r]eplace / [n]ew / [c]ancel` prompt
+  it already had - replace only rewrites the recipe, the copies stay.
+- `--yes` skips the question. With no console to ask on, the command refuses
+  and says to add it, never assumes an answer.
+
+The prompt lives in the CLI, not the modules: asking is presentation. The
+snapshot stays in the modules (D-032), so a web caller is still protected.
+
+**`--dry-run` is an opt-in flag on `deck import`, `deck paste` and
+`backup import` only.** Not on by default - most decklists import cleanly, and
+a preview-and-confirm on every import is another prompt nobody reads. Not on
+every write command either: offering it on twelve commands because it costs
+the same everywhere is not a reason. It covers one real gap. **A wrong
+physical deck import can't be cleanly undone:** `deck delete` returns the
+copies to just-loose rather than removing them, because for a real deck you
+break up that is right - so a typo'd decklist leaves 51 copies you don't own.
+No snapshot is taken before a fresh import, since it destroys nothing. During
+M0 every sleeved deck gets imported, so this is the mistake most likely to
+happen. `backup import --dry-run` shows which arts would drop to unsorted, and
+skips the confirmation, since nothing is saved.
+
+**A dry run runs against a copy of the database, not a rolled-back
+transaction.** The modules call `conn.commit()` themselves, so a rollback at
+the end would undo nothing. The copy is made with SQLite's backup API into a
+temp folder and deleted afterwards; it is 3 MB and takes no noticeable time.
+Snapshots taken during a dry run land in that temp folder too, so they never
+push a real one out of the ten kept.

@@ -21,8 +21,9 @@ a lot at once quick.
 
 **Real data has started.** The first sleeved deck, Reiju, is in: 51 copies of 18
 cards, arts not yet sorted. From here the database holds data that exists
-nowhere else, so it's protected now (D-032): destructive commands snapshot the
-database first, and `backup export` writes a JSON copy that can be moved to
+nowhere else, so it's protected now (D-032, D-034): destructive commands
+snapshot the database first and ask when something would be lost, imports take
+`--dry-run`, and `backup export` writes a JSON copy that can be moved to
 another machine.
 
 Phase 2 was re-cut on 2026-09-15 around one sentence — *I open the app, see my
@@ -37,16 +38,15 @@ as UI instead of terminal tables. See **D-024** for the reasoning.
 | Sets covered | OP01–OP16, EB01–EB04, ST01–ST30, PRB01–02, promos |
 | Bad rows in logs | none |
 | Owned so far | 51 copies, 1 deck |
-| Tests | 492 passing |
+| Tests | 508 passing |
 
 **Known limitation:** OptcgAPI lags the real game. The game is out to **OP17**;
 the API only has **OP16**. Re-run the sync when it catches up — no code change
 needed.
 
-**Next up:** two remaining safety tasks before bulk entry — `--dry-run` and
-confirmation prompts on destructive commands, then a sync check that reports
-printings that stopped refreshing (especially ones you own). Then the rest of
-[PHASE_2.md](PHASE_2.md) M0: import every sleeved deck.
+**Next up:** one remaining safety task before bulk entry — a sync check that
+reports printings that stopped refreshing (especially ones you own). Then the
+rest of [PHASE_2.md](PHASE_2.md) M0: import every sleeved deck.
 
 ---
 
@@ -79,7 +79,7 @@ python -m pytest tests/ --cov=src --cov-report=term-missing   # coverage (99%)
   cards table count:  4338
 ```
 
-...and 492 passing tests. Anything else means something changed upstream —
+...and 508 passing tests. Anything else means something changed upstream —
 `Unknown sub_types` above 0 usually means a new set introduced a card type;
 add it to `SEED_TYPES` in `src/known_types.py` and re-sync.
 
@@ -117,7 +117,8 @@ python -m src.cli deck paste --name "Red Luffy"  # type/paste the list, finish w
 python -m src.cli deck list
 python -m src.cli deck show "Red Luffy"          # owned vs missing per card
 python -m src.cli deck set-physical "Purple Doffy"
-python -m src.cli deck delete "Red Luffy"        # copies return to just-loose
+python -m src.cli deck delete "Red Luffy"        # asks first; copies return to just-loose
+python -m src.cli deck import new.txt --name "Enel" --dry-run   # see the result, save nothing
 
 # Collection — you own gameplay cards; the art is optional detail
 python -m src.cli collection add OP05-097 4                  # unsorted, into just-loose
@@ -139,7 +140,7 @@ python -m src.cli location list                  # grouped by kind
 python -m src.cli location show "Mewtwo Binder"  # what's in it, art by art
 python -m src.cli location show                  # defaults to just-loose
 python -m src.cli location rename "OP13 Box" "OP13 Storage"
-python -m src.cli location delete "OP13 Storage" # copies return to just-loose
+python -m src.cli location delete "OP13 Storage" # asks first if it holds copies
 
 # Loans — the card is still yours, it's just somewhere else
 python -m src.cli loan OP05-097 1 "Friend 1" --art p1
@@ -201,6 +202,13 @@ Two kinds, for two jobs (D-032):
 
 `data/backups/` is gitignored: it's your data, not code.
 
+**Before it happens** (D-034): `deck delete`, and `location delete` on a location
+that holds copies, say what will move and wait for `y`; `--yes` skips that.
+`deck import`, `deck paste` and `backup import` take `--dry-run`, which runs the
+command against a throwaway copy and prints exactly what it would do. Use it on
+a decklist you're unsure of: deleting a wrongly imported deck leaves its copies
+in just-loose, it doesn't remove them.
+
 ### First run, in this order
 
 You can't move a card you don't own yet, and you own nothing until a deck import
@@ -233,7 +241,7 @@ src/
   decks.py        deck import and management
   backup.py       snapshots, and JSON export/import of your own data
   cli.py          argparse entry point over all of the above
-tests/            492 tests
+tests/            508 tests
 data/             optcg.db, cache/ and backups/ (all gitignored)
 ```
 

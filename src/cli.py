@@ -22,6 +22,7 @@ import argparse
 import shlex
 import sqlite3
 import sys
+import tempfile
 from pathlib import Path
 
 from src import backup
@@ -29,7 +30,7 @@ from src import collection as coll
 from src import storage as store
 from src.backup import BackupError
 from src.collection import CollectionError
-from src.db_setup import DB_PATH, connect
+from src.db_setup import DB_PATH, DEFAULT_LOOSE_LOCATION, connect
 from src.decks import (
     DeckError,
     DeckNameExists,
@@ -55,6 +56,25 @@ def _use_utf8_output() -> None:
 def warn(lines: list[str], label: str = "warning") -> None:
     for line in lines:
         print(f"  {label}: {line}")
+
+
+def ask_to_continue(question: str) -> bool:
+    """Ask before something that loses information. False means stop.
+
+    Only asked when something would actually be lost (D-034) - a prompt that
+    appears every time is one nobody reads.
+    """
+    try:
+        answer = input(f"{question} [y/N] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        # No console to ask on - piped input, CI, or a closed stdin.
+        print()
+        print("error: cannot prompt here - re-run with --yes", file=sys.stderr)
+        return False
+    if answer not in ("y", "yes"):
+        print("cancelled - nothing changed.")
+        return False
+    return True
 
 
 # --------------------------------------------------------------------------
@@ -170,6 +190,16 @@ def cmd_deck_show(conn: sqlite3.Connection, args) -> int:
 
 
 def cmd_deck_delete(conn: sqlite3.Connection, args) -> int:
+    if not args.yes:
+        detail = show_deck(conn, args.deck)
+        kind = "physical" if detail.is_physical else "wishlist"
+        print(f"Deleting {kind} deck {detail.name!r} deletes its recipe "
+              f"({detail.total_cards} cards).")
+        if detail.sleeved_total:
+            print(f"Its {detail.sleeved_total} sleeved copies go to just-loose - "
+                  f"you still own them.")
+        if not ask_to_continue("delete it?"):
+            return 1
     result = delete_deck(conn, args.deck)
     print(f"deleted deck {result.name!r}. "
           f"{result.copies_returned} copies went back to just-loose.")
@@ -311,6 +341,16 @@ def cmd_location_rename(conn: sqlite3.Connection, args) -> int:
 
 
 def cmd_location_delete(conn: sqlite3.Connection, args) -> int:
+    # just-loose is refused by delete_location itself; asking first would be
+    # a question whose answer doesn't matter.
+    if not args.yes and args.name.strip() != DEFAULT_LOOSE_LOCATION:
+        rows = store.contents(conn, args.name, None, args.kind)
+        if rows:  # an empty location loses nothing, so it isn't asked about
+            print(f"{args.name!r} holds {sum(r[3] for r in rows)} copies of "
+                  f"{len({r[0] for r in rows})} card(s).")
+            print("They go to just-loose - you still own them, but not where they were.")
+            if not ask_to_continue("delete it?"):
+                return 1
     moved = store.delete_location(conn, args.name, args.kind)
     print(f"deleted location {args.name!r}. {moved} copies went back to just-loose.")
     return 0
@@ -372,19 +412,12 @@ def cmd_backup_import(conn: sqlite3.Connection, args) -> int:
     print(f"{args.path}: {len(plan.decks)} deck(s), {plan.location_count} location(s), "
           f"{plan.copy_total} copies{when}")
 
-    if not args.yes:
+    if not args.yes and not args.dry_run:
         now = backup.current_counts(conn)
         print(f"This REPLACES what is here now: {now.decks} deck(s), {now.locations} "
               f"location(s), {now.copies} copies.")
         print("A snapshot is taken first, so it can be undone.")
-        try:
-            answer = input("replace? [y/N] ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            print("error: cannot prompt here - re-run with --yes", file=sys.stderr)
-            return 1
-        if answer not in ("y", "yes"):
-            print("cancelled - nothing changed.")
+        if not ask_to_continue("replace?"):
             return 1
 
     result = backup.import_collection(conn, plan)
@@ -501,6 +534,12 @@ ID_HELP = "card id, e.g. OP06-042"
 NAME_HELP = "put it in quotes if it has spaces"
 
 
+def dry_run_option(p) -> None:
+    """Only on the imports (D-034): where you want to see the result before it lands."""
+    p.add_argument("--dry-run", action="store_true",
+                   help="show what would happen, then throw it away - nothing is saved")
+
+
 def _command(sub, name: str, summary: str, *examples: str, description: str | None = None):
     """Add a subcommand whose --help says what it is for and shows it in use."""
     epilog = None
@@ -554,11 +593,13 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--on-conflict", choices=["replace", "new"],
                        help="if the name is taken: replace the old deck, or keep both. "
                             "Without this you are asked")
+        dry_run_option(p)
 
     p = _command(
         deck, "import", "import a decklist from a text file",
         'deck import decklists\\Reiju_deck.txt --name "Reiju"',
         "deck import decklists\\Enel.txt --wishlist",
+        'deck import decklists\\Enel.txt --name "Enel" --dry-run',
         'deck import decklists\\Reiju_v2.txt --name "Reiju" --on-conflict replace',
         description="Import a decklist from a text file. Both of these formats work:\n\n"
                     "  Leader: 1 Vinsmoke Reiju OP06-042      Leader\n"
@@ -596,10 +637,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = _command(
         deck, "delete", "delete a deck - its copies go back to just-loose",
         'deck delete "Reiju"',
+        'deck delete "Reiju" --yes',
         description="Delete a deck. You still own its cards: the copies that were\n"
-                    "sleeved in it move to just-loose.",
+                    "sleeved in it move to just-loose. You are asked first, and the\n"
+                    "database is snapshotted to data/backups/ before anything changes.",
     )
     p.add_argument("deck", help="deck name or id")
+    p.add_argument("--yes", action="store_true", help="don't ask for confirmation")
     p.set_defaults(func=cmd_deck_delete)
 
     p = _command(
@@ -762,10 +806,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = _command(
         loc, "delete", "delete a location - its copies go back to just-loose",
         'location delete "OP06 Box"',
+        'location delete "OP06 Box" --yes',
+        description="Delete a location. Its copies move to just-loose. If it holds any,\n"
+                    "you are asked first; the database is snapshotted either way.",
     )
     p.add_argument("name")
     p.add_argument("--kind", choices=store.LOCATION_KINDS, default=None,
                    help=f"{kind_help} - {kind_note}")
+    p.add_argument("--yes", action="store_true", help="don't ask for confirmation")
     p.set_defaults(func=cmd_location_delete)
 
     p = _command(
@@ -840,6 +888,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = _command(
         bak, "import", "replace your collection with one from an export",
         "backup import my_collection.json",
+        "backup import my_collection.json --dry-run",
         "backup import my_collection.json --yes",
         description="Load an export, REPLACING the decks, locations and copies here.\n"
                     "Nothing is merged. A snapshot is taken first, and you are asked to\n"
@@ -848,6 +897,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("path", help="a file written by `backup export`")
     p.add_argument("--yes", action="store_true", help="don't ask for confirmation")
+    dry_run_option(p)
     p.set_defaults(func=cmd_backup_import)
 
     # ---- shell ----------------------------------------------------------
@@ -871,6 +921,35 @@ def main(argv: list[str] | None = None) -> int:
     if args.group == "shell":
         return run_shell(args.db)
 
+    if getattr(args, "dry_run", False):
+        return run_dry(args)
+    return run_command(args)
+
+
+def run_dry(args) -> int:
+    """Run a command against a throwaway copy of the database (D-034).
+
+    A copy rather than a transaction rolled back at the end: the modules
+    commit as they go, so a rollback would undo nothing.
+    """
+    # ignore_cleanup_errors: on Windows a file still being released can make
+    # removing the temp folder fail, and that must not fail the command.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        copy = Path(tmp) / args.db.name
+        source = connect(args.db)
+        dest = sqlite3.connect(copy)
+        try:
+            source.backup(dest)
+        finally:
+            dest.close()
+            source.close()
+        args.db = copy
+        code = run_command(args)
+    print("(dry run - nothing was saved)")
+    return code
+
+
+def run_command(args) -> int:
     conn = connect(args.db)
     try:
         return args.func(conn, args)

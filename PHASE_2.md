@@ -41,7 +41,8 @@ side effect (D-011), so this is also the cheapest bulk entry that exists.
 
 Once there's real data, `python -m src.cli backup export` after a session of
 entry is the copy that survives anything (D-032). Destructive commands already
-snapshot by themselves.
+snapshot by themselves. Add `--dry-run` to an import you're unsure of: a wrong
+physical import can't be cleanly undone with `deck delete` (D-034).
 
 **Watch for, and report rather than fix quietly:**
 

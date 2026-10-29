@@ -160,7 +160,7 @@ class DeckCommandTests(CliTestCase):
 
     def test_delete(self):
         self.run_cli("deck", "import", str(self.decklist), "--name", "Red", "--physical")
-        code, out, _ = self.run_cli("deck", "delete", "Red")
+        code, out, _ = self.run_cli("deck", "delete", "Red", "--yes")
         self.assertEqual(code, 0)
         self.assertIn("back to just-loose", out)
 
@@ -486,3 +486,156 @@ class ShellTests(CliTestCase):
         code, out, _ = self.run_shell("shell")
         self.assertEqual(code, 0)
         self.assertIn("already in the shell", out)
+
+
+class ConfirmTests(CliTestCase):
+    """D-034: ask only when something would actually be lost."""
+
+    def setUp(self):
+        super().setUp()
+        self.run_cli("deck", "import", str(self.decklist), "--name", "Red")
+        self.run_cli("location", "add", "Binder A", "--kind", "binder")
+
+    def deck_count(self) -> int:
+        conn = sqlite3.connect(self.db)
+        try:
+            return conn.execute("SELECT COUNT(*) FROM decks").fetchone()[0]
+        finally:
+            conn.close()
+
+    def test_deck_delete_says_what_moves_and_waits_for_yes(self):
+        with mock.patch("builtins.input", return_value="y") as prompt:
+            code, out, _ = self.run_cli("deck", "delete", "Red")
+        self.assertEqual(code, 0)
+        prompt.assert_called_once()
+        self.assertIn("51 sleeved copies go to just-loose", out)
+        self.assertEqual(self.deck_count(), 0)
+
+    def test_anything_but_yes_cancels(self):
+        for answer in ("n", "", "nope"):
+            with mock.patch("builtins.input", return_value=answer):
+                code, out, _ = self.run_cli("deck", "delete", "Red")
+            self.assertEqual(code, 1)
+            self.assertIn("cancelled", out)
+        self.assertEqual(self.deck_count(), 1)
+
+    def test_no_console_means_no_delete(self):
+        with mock.patch("builtins.input", side_effect=EOFError):
+            code, _, err = self.run_cli("deck", "delete", "Red")
+        self.assertEqual(code, 1)
+        self.assertIn("--yes", err)
+        self.assertEqual(self.deck_count(), 1)
+
+    def test_wishlist_deck_has_no_copies_to_mention(self):
+        self.run_cli("deck", "import", str(self.decklist), "--name", "Wish", "--wishlist")
+        with mock.patch("builtins.input", return_value="y"):
+            _, out, _ = self.run_cli("deck", "delete", "Wish")
+        self.assertIn("wishlist deck 'Wish'", out)
+        self.assertNotIn("sleeved copies", out)
+
+    def test_unknown_deck_errors_before_asking(self):
+        with mock.patch("builtins.input") as prompt:
+            code, _, err = self.run_cli("deck", "delete", "Nope")
+        self.assertEqual(code, 1)
+        prompt.assert_not_called()
+        self.assertIn("no deck named", err)
+
+    def test_empty_location_is_deleted_without_asking(self):
+        with mock.patch("builtins.input") as prompt:
+            code, _, _ = self.run_cli("location", "delete", "Binder A")
+        self.assertEqual(code, 0)
+        prompt.assert_not_called()
+
+    def test_location_with_copies_asks(self):
+        self.run_cli("collection", "add", "OP05-001", "3", "--to", "Binder A")
+        with mock.patch("builtins.input", return_value="n"):
+            code, out, _ = self.run_cli("location", "delete", "Binder A")
+        self.assertEqual(code, 1)
+        self.assertIn("holds 3 copies of 1 card(s)", out)
+        _, out, _ = self.run_cli("location", "list")
+        self.assertIn("Binder A", out)
+
+    def test_yes_flag_skips_the_question(self):
+        self.run_cli("collection", "add", "OP05-001", "3", "--to", "Binder A")
+        with mock.patch("builtins.input") as prompt:
+            code, _, _ = self.run_cli("location", "delete", "Binder A", "--yes")
+        self.assertEqual(code, 0)
+        prompt.assert_not_called()
+
+    def test_just_loose_is_refused_without_asking(self):
+        self.run_cli("collection", "add", "OP05-001", "3")
+        with mock.patch("builtins.input") as prompt:
+            code, _, err = self.run_cli("location", "delete", "just-loose")
+        self.assertEqual(code, 1)
+        prompt.assert_not_called()
+        self.assertIn("built in", err)
+
+
+class DryRunTests(CliTestCase):
+    """D-034: --dry-run on the imports runs against a copy and keeps nothing."""
+
+    def owned(self) -> int:
+        conn = sqlite3.connect(self.db)
+        try:
+            return conn.execute("SELECT COALESCE(SUM(quantity), 0) FROM copies").fetchone()[0]
+        finally:
+            conn.close()
+
+    def test_deck_import_shows_the_result_and_saves_nothing(self):
+        code, out, _ = self.run_cli("deck", "import", str(self.decklist), "--name", "Red", "--dry-run")
+        self.assertEqual(code, 0)
+        self.assertIn("+51 copies", out)
+        self.assertIn("dry run - nothing was saved", out)
+        self.assertEqual(self.owned(), 0)
+        _, out, _ = self.run_cli("deck", "list")
+        self.assertIn("no decks yet", out)
+
+    def test_deck_paste(self):
+        lines = self.decklist.read_text(encoding="utf-8").splitlines()
+        with mock.patch("builtins.input", side_effect=[*lines, "end"]):
+            code, out, _ = self.run_cli("deck", "paste", "--name", "Red", "--dry-run")
+        self.assertEqual(code, 0)
+        self.assertIn("created physical deck", out)
+        self.assertEqual(self.owned(), 0)
+
+    def test_replace_is_previewed_too(self):
+        self.run_cli("deck", "import", str(self.decklist), "--name", "Red")
+        code, out, _ = self.run_cli("deck", "import", str(self.decklist), "--name", "Red",
+                                    "--wishlist", "--on-conflict", "replace", "--dry-run")
+        self.assertEqual(code, 0)
+        self.assertIn("replaced wishlist deck", out)
+        _, out, _ = self.run_cli("deck", "list")
+        self.assertIn("physical", out)  # still the real one
+
+    def test_takes_no_snapshot_where_the_real_ones_live(self):
+        self.run_cli("deck", "import", str(self.decklist), "--name", "Red")
+        self.run_cli("deck", "import", str(self.decklist), "--name", "Red",
+                     "--on-conflict", "replace", "--dry-run")
+        self.assertFalse((self.db.parent / "backups").exists())
+
+    def test_backup_import_does_not_ask(self):
+        self.run_cli("deck", "import", str(self.decklist), "--name", "Red")
+        export = Path(self.tmp.name) / "move.json"
+        self.run_cli("backup", "export", str(export))
+        self.run_cli("deck", "delete", "Red", "--yes")
+        before = self.owned()
+
+        with mock.patch("builtins.input") as prompt:
+            code, out, _ = self.run_cli("backup", "import", str(export), "--dry-run")
+        self.assertEqual(code, 0)
+        prompt.assert_not_called()
+        self.assertIn("imported 1 deck(s)", out)
+        _, out, _ = self.run_cli("deck", "list")
+        self.assertIn("no decks yet", out)
+        self.assertEqual(self.owned(), before)
+
+    def test_a_failing_import_still_says_nothing_was_saved(self):
+        code, out, err = self.run_cli("deck", "import", "missing.txt", "--dry-run")
+        self.assertEqual(code, 1)
+        self.assertIn("could not read", err)
+        self.assertIn("nothing was saved", out)
+
+    def test_not_offered_on_other_commands(self):
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            main(["--db", str(self.db), "collection", "add", "OP05-001", "1", "--dry-run"])
+        self.assertEqual(self.owned(), 0)

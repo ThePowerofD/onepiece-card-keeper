@@ -410,6 +410,9 @@ OP17. Not a bug in this code.
   deck, importing an export and `--reset` copy the database to `data/backups/`
   before writing (D-032). The snapshot lives in the module function, so every
   caller gets it.
+- **Ask only when something is lost.** Prompts are presentation and live in the
+  callers; they appear only when information would be lost, never on every
+  write (D-034).
 
 ---
 
