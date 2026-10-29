@@ -28,6 +28,17 @@ pip install -e .                     # installs the `optcg` command
 optcg setup                          # create the database, download every card
 ```
 
+> **Windows: "running scripts is disabled on this system"?** PowerShell blocks
+> `venv\Scripts\activate` by default on a fresh machine. Allow scripts you run
+> yourself, once:
+>
+> ```
+> Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+> ```
+>
+> Or use Command Prompt (`cmd`) instead of PowerShell, where `venv\Scripts\activate`
+> works without it.
+
 **Every time**, activate the venv and type `optcg`. That opens the shell, where
 you type commands one after another without any prefix:
 
