@@ -42,3 +42,7 @@ python -m pytest tests/test_sanitize.py::ToIntTests
 - The API lags the real game (ends at OP16; the game is at OP17). Not a bug.
 - New card types appear with new sets. When `unknown_type_log` is non-empty after
   a sync, add them to `SEED_TYPES` in `src/known_types.py` and re-sync.
+- **Never delete stale printings** — rows the last sync didn't refresh (D-035).
+  A large stale count means the API sent an incomplete feed, not that cards were
+  removed. Sync again later; don't "clean up", even if asked to tidy the catalog,
+  without telling the owner this first.

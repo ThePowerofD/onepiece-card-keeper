@@ -9,13 +9,29 @@ Run:
 
 from __future__ import annotations
 
+import io
+import shlex
 import sqlite3
+import tempfile
 import unittest
+from contextlib import redirect_stdout
+from pathlib import Path
 from unittest import mock
 
-from src.db_setup import create_schema
+from src import collection as coll
+from src import storage as store
+from src.cli import main as cli_main
+from src.db_setup import connect, create_schema
 from src.known_types import SEED_TYPES, seed_known_types
-from src.sync import FIELD_ALIASES, pick, sanitize_row, sync
+from src.sync import (
+    FIELD_ALIASES,
+    STALE_ALARM_FRACTION,
+    pick,
+    print_stale_report,
+    run_sync,
+    sanitize_row,
+    sync,
+)
 
 NOW = "2026-08-11T00:00:00+00:00"
 
@@ -242,7 +258,7 @@ class SyncTests(unittest.TestCase):
                                  "re_identified": 0, "cards_reconciled": 0,
                                  "fields_rewritten": 0, "implausible_counters": 0,
                                  "errata_outranks_base": 0,
-                                 "overridden": 0})
+                                 "overridden": 0, "stale": 0, "stale_owned": 0})
 
     def test_garbage_rows_do_not_crash_the_sync(self):
         rows = [api_row(), {}, {"card_image_id": "X"}, api_row(card_name=None)]
@@ -309,6 +325,138 @@ class SyncCliTests(unittest.TestCase):
     def test_use_cache_flag_is_accepted(self):
         output = self.run_main([api_row()], "--use-cache")
         self.assertIn("Sync summary", output)
+
+
+def luffy(variant: str | None = None, **overrides) -> dict:
+    cid = "OP05-097" + (f"_{variant}" if variant else "")
+    return api_row(card_image_id=cid, card_name=f"Luffy {variant or 'base'}", **overrides)
+
+
+class StalePrintingTests(unittest.TestCase):
+    """D-035: printings the feed stopped sending are reported, never deleted."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Path(self.tmp.name) / "optcg.db"
+        self.conn = connect(self.db)
+        create_schema(self.conn)
+        seed_known_types(self.conn, SEED_TYPES)
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def run_sync(self, rows):
+        with mock.patch("src.sync.fetch_all_set_cards", return_value=rows),              mock.patch("src.sync.fetch_all_st_cards", return_value=[]),              mock.patch("src.sync.fetch_all_promos", return_value=[]),              redirect_stdout(io.StringIO()):
+            return run_sync(self.conn)
+
+    def own(self, art: str, quantity: int, where: str | None = None) -> None:
+        container = store.resolve_container(self.conn, where)
+        coll.add(self.conn, "OP05-097", quantity, art, container)
+
+    def test_nothing_is_stale_when_the_feed_is_complete(self):
+        self.run_sync([luffy(), luffy("p1")])
+        stats, report = self.run_sync([luffy(), luffy("p1")])
+        self.assertEqual(stats["stale"], 0)
+        self.assertEqual(report.owned, [])
+
+    def test_a_missing_printing_is_reported_and_kept(self):
+        self.run_sync([luffy(), luffy("p1")])
+        stats, report = self.run_sync([luffy()])
+        self.assertEqual(stats["stale"], 1)
+        self.assertEqual(report.total, 1)
+        ids = {r[0] for r in self.conn.execute("SELECT card_image_id FROM cards")}
+        self.assertIn("OP05-097_p1", ids)  # never deleted
+
+    def test_it_keeps_reporting_until_the_printing_returns(self):
+        self.run_sync([luffy(), luffy("p1")])
+        self.run_sync([luffy()])
+        self.assertEqual(self.run_sync([luffy()])[0]["stale"], 1)
+        self.assertEqual(self.run_sync([luffy(), luffy("p1")])[0]["stale"], 0)
+
+    def test_owned_stale_printing_names_where_the_copies_are(self):
+        self.run_sync([luffy(), luffy("p1")])
+        store.add_location(self.conn, "Binder A", "binder")
+        self.own("p1", 2, "Binder A")
+        self.own("p1", 1)
+        stats, report = self.run_sync([luffy()])
+
+        self.assertEqual(stats["stale_owned"], 1)
+        stale = report.owned[0]
+        self.assertEqual(stale.card_image_id, "OP05-097_p1")
+        self.assertEqual(sorted(h.quantity for h in stale.holdings), [1, 2])
+        self.assertEqual(stale.candidates, [])
+
+    def test_a_renamed_printing_suggests_its_new_id(self):
+        """The D-029 case: same card, new id, old row left behind."""
+        self.run_sync([luffy(), luffy("alternate_art")])
+        self.own("alternate_art", 2)
+        _, report = self.run_sync([luffy(), luffy("alt_art_v2")])
+        self.assertEqual(report.owned[0].candidates, ["OP05-097_alt_art_v2"])
+
+    def test_the_printed_command_actually_moves_the_copies(self):
+        self.run_sync([luffy(), luffy("alternate_art")])
+        store.add_location(self.conn, "Binder A", "binder")
+        self.own("alternate_art", 2, "Binder A")
+        _, report = self.run_sync([luffy(), luffy("alt_art_v2")])
+
+        out = io.StringIO()
+        with redirect_stdout(out):
+            print_stale_report(report)
+        line = next(l for l in out.getvalue().splitlines() if "collection set-art" in l)
+        argv = shlex.split(line.strip())[3:]  # drop "python -m src.cli"
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(cli_main(["--db", str(self.db), *argv]), 0)
+
+        rows = self.conn.execute(
+            "SELECT card_image_id, quantity FROM copies WHERE base_card_id = 'OP05-097'"
+        ).fetchall()
+        self.assertEqual(rows, [("OP05-097_alt_art_v2", 2)])
+
+    def test_unowned_stale_printings_are_counted_not_listed(self):
+        self.run_sync([luffy(), luffy("p1"), luffy("p2")])
+        self.own("p1", 1)
+        stats, report = self.run_sync([luffy(), luffy("p1")])
+        self.assertEqual(stats["stale"], 1)
+        self.assertEqual(report.owned, [])
+
+    def test_a_large_drop_is_flagged_as_a_bad_feed(self):
+        rows = [api_row(card_image_id=f"OP05-{n:03d}", card_set_id=f"OP05-{n:03d}")
+                for n in range(1, 41)]
+        self.run_sync(rows)
+        _, small = self.run_sync(rows[1:])
+        self.assertLessEqual(small.fraction, STALE_ALARM_FRACTION)
+        self.assertFalse(small.suspicious)
+        _, big = self.run_sync(rows[:20])
+        self.assertTrue(big.suspicious)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM cards").fetchone()[0], 40)
+
+    def test_an_empty_feed_deletes_nothing(self):
+        self.run_sync([luffy(), luffy("p1")])
+        _, report = self.run_sync([])
+        self.assertTrue(report.suspicious)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM cards").fetchone()[0], 2)
+
+    def test_a_card_you_own_with_no_printing_left_is_flagged(self):
+        """Unsorted copies and recipes name only the base id - it must still be caught."""
+        other = api_row(card_image_id="OP05-001", card_set_id="OP05-001")
+        self.run_sync([luffy(), other])
+        coll.add(self.conn, "OP05-097", 3, None, store.resolve_container(self.conn, None))
+        _, report = self.run_sync([other])
+        self.assertEqual(report.vanished_cards, ["OP05-097"])
+
+    def test_report_says_nothing_was_deleted(self):
+        self.run_sync([luffy(), luffy("p1")])
+        self.own("p1", 1)
+        _, report = self.run_sync([])
+        out = io.StringIO()
+        with redirect_stdout(out):
+            print_stale_report(report)
+        text = out.getvalue()
+        self.assertIn("never deleted", text)
+        self.assertIn("Do NOT clean these rows up", text)
+        self.assertIn("You own copies of 1 stale printing", text)
+
 
 if __name__ == "__main__":
     unittest.main()

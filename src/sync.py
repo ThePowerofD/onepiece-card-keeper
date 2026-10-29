@@ -12,6 +12,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import NamedTuple
 
 from src.api_client import fetch_all_promos, fetch_all_set_cards, fetch_all_st_cards
 from src.collisions import resolve_collisions
@@ -241,6 +242,103 @@ def inherit_from_base_printing(conn: sqlite3.Connection) -> dict[str, int]:
     ).fetchone()[0]
     return stats
 
+
+# --------------------------------------------------------------------------
+# stale printings (D-035)
+# --------------------------------------------------------------------------
+
+#: Above this share of printings missing from one sync, the feed is almost
+#: certainly incomplete rather than the cards gone. Today's feed loses none.
+STALE_ALARM_FRACTION = 0.05
+
+
+class Holding(NamedTuple):
+    container: str
+    kind: str        # a location kind, or 'deck'
+    quantity: int
+
+
+class OwnedStale(NamedTuple):
+    card_image_id: str
+    base_card_id: str
+    name: str
+    last_synced: str | None
+    holdings: list[Holding]
+    candidates: list[str]   # printings of the same card that first appeared this run
+
+
+class StaleReport(NamedTuple):
+    total: int
+    fraction: float
+    owned: list[OwnedStale]
+    vanished_cards: list[str]   # owned or in a recipe, and no printing left in the feed
+
+    @property
+    def suspicious(self) -> bool:
+        return self.fraction > STALE_ALARM_FRACTION
+
+
+def find_stale(conn: sqlite3.Connection, refreshed: set[str], new_ids: set[str]) -> StaleReport:
+    """Printings this run didn't refresh, and which of them the owner depends on.
+
+    A printing goes stale when the feed stops sending it: the API removed it,
+    renamed it (a D-029 synthesised id then changes, and the same card arrives
+    under a new id), or sent an incomplete feed. Stale rows are reported and
+    **never deleted** - a partial feed would otherwise take hundreds of rows
+    with it, and the owner's copies hang off `card_image_id` (D-035).
+
+    `refreshed` is the set of ids this run wrote. It is passed in rather than
+    read back from `last_synced`, which has one-second resolution - two runs in
+    the same second would look like one.
+    """
+    rows = conn.execute(
+        "SELECT card_image_id, base_card_id, name, last_synced FROM cards ORDER BY card_image_id"
+    ).fetchall()
+    stale = [r for r in rows if r[0] not in refreshed]
+    population = len(rows)
+    printings_by_card: dict[str, list[str]] = {}
+    for card_image_id, base_card_id, _, _ in rows:
+        printings_by_card.setdefault(base_card_id, []).append(card_image_id)
+
+    owned = []
+    for card_image_id, base_card_id, name, last_synced in stale:
+        holdings = [
+            Holding(*row) for row in conn.execute(
+                "SELECT COALESCE(l.name, d.name), COALESCE(l.kind, 'deck'), SUM(c.quantity) "
+                "FROM copies c "
+                "LEFT JOIN storage_locations l ON l.id = c.location_id "
+                "LEFT JOIN decks d ON d.id = c.deck_id "
+                "WHERE c.card_image_id = ? GROUP BY c.location_id, c.deck_id "
+                "ORDER BY 1",
+                (card_image_id,),
+            )
+        ]
+        if not holdings:
+            continue
+        candidates = sorted(c for c in printings_by_card[base_card_id] if c in new_ids)
+        owned.append(OwnedStale(card_image_id, base_card_id, name, last_synced,
+                                holdings, candidates))
+
+    # Cards the owner relies on at gameplay level - unsorted copies and deck
+    # recipes name only the base id - where not one printing refreshed. A card
+    # the catalog never had (OP17 before the API) isn't stale, just unknown.
+    relied_on = {base for (base,) in conn.execute(
+        "SELECT base_card_id FROM copies UNION SELECT base_card_id FROM deck_cards"
+    )}
+    vanished = sorted(
+        base for base in relied_on
+        if base in printings_by_card
+        and not any(c in refreshed for c in printings_by_card[base])
+    )
+
+    return StaleReport(
+        total=len(stale),
+        fraction=len(stale) / population if population else 0.0,
+        owned=owned,
+        vanished_cards=vanished,
+    )
+
+
 LOG_SKIPPED_SQL = """
 INSERT INTO skipped_cards_log (raw_card_data, reason) VALUES (?, ?)
 """
@@ -251,8 +349,14 @@ INSERT INTO unknown_type_log (card_image_id, raw_sub_types) VALUES (?, ?)
 
 
 def sync(conn: sqlite3.Connection, use_cache: bool = False) -> dict[str, int]:
+    return run_sync(conn, use_cache)[0]
+
+
+def run_sync(conn: sqlite3.Connection, use_cache: bool = False) -> tuple[dict[str, int], StaleReport]:
+    """Sync, and also return the full stale-printing report (D-035)."""
     known_types = load_known_types(conn)
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    existing_ids = {cid for (cid,) in conn.execute("SELECT card_image_id FROM cards")}
 
     print("Fetching set cards...")
     set_cards = fetch_all_set_cards(use_cache=use_cache)
@@ -285,6 +389,7 @@ def sync(conn: sqlite3.Connection, use_cache: bool = False) -> dict[str, int]:
         ),
     }
 
+    refreshed: set[str] = set()
     cur = conn.cursor()
     for row in all_rows:
         sanitized = sanitize_row(row, known_types, now)
@@ -294,6 +399,7 @@ def sync(conn: sqlite3.Connection, use_cache: bool = False) -> dict[str, int]:
             continue
 
         cur.execute(UPSERT_CARD_SQL, {k: v for k, v in sanitized.items() if not k.startswith("_")})
+        refreshed.add(sanitized["card_image_id"])
         stats["inserted"] += 1
         if sanitized["_repaired"]:
             stats["repaired"] += 1
@@ -314,7 +420,48 @@ def sync(conn: sqlite3.Connection, use_cache: bool = False) -> dict[str, int]:
     stats["overridden"] = apply_overrides(conn)
 
     conn.commit()
-    return stats
+
+    report = find_stale(conn, refreshed, refreshed - existing_ids)
+    stats["stale"] = report.total
+    stats["stale_owned"] = len(report.owned)
+    return stats, report
+
+
+def print_stale_report(report: StaleReport) -> None:
+    """Owned printings first, with the command that fixes each one."""
+    if not report.total:
+        print("  Stale printings:    0")
+        return
+    print(f"  Stale printings:    {report.total} not in this feed - kept, never deleted (D-035)")
+    if report.suspicious:
+        print(f"  WARNING: {report.fraction:.1%} of printings are missing from the feed. That is "
+              f"almost certainly")
+        print("           an incomplete API response, not removed cards. Nothing was deleted;")
+        print("           sync again later. Do NOT clean these rows up by hand.")
+
+    if report.owned:
+        print(f"\n  You own copies of {len(report.owned)} stale printing(s):")
+        for s in report.owned:
+            print(f"    {s.card_image_id}  {s.name}  (last seen {s.last_synced or 'never'})")
+            for h in s.holdings:
+                print(f"      {h.quantity} in {h.kind} {h.container!r}")
+            if len(s.candidates) == 1:
+                new = s.candidates[0]
+                print(f"      new this sync: {new} - if it's the same card, move them with:")
+                for h in s.holdings:
+                    print(f"        python -m src.cli collection set-art {s.base_card_id} "
+                          f"{h.quantity} {new} --from-art {s.card_image_id} "
+                          f"--in \"{h.container}\" --kind {h.kind}")
+            elif s.candidates:
+                print(f"      new printings of {s.base_card_id} this sync: "
+                      f"{', '.join(s.candidates)} - check which one it is")
+            else:
+                print("      no new printing of this card appeared - it may have been removed")
+
+    if report.vanished_cards:
+        print(f"\n  WARNING: no printing of {len(report.vanished_cards)} card(s) you own or "
+              f"have in a deck came back:")
+        print(f"    {', '.join(report.vanished_cards)}")
 
 
 def main() -> None:
@@ -325,7 +472,7 @@ def main() -> None:
 
     conn = connect(args.db)
     try:
-        stats = sync(conn, use_cache=args.use_cache)
+        stats, stale = run_sync(conn, use_cache=args.use_cache)
         print()
         print("=== Sync summary ===")
         print(f"  Total rows fetched: {stats['total']}")
@@ -348,6 +495,7 @@ def main() -> None:
               f"{stats['exact_duplicates']} exact duplicates dropped - D-029)")
         count = conn.execute("SELECT COUNT(*) FROM cards").fetchone()[0]
         print(f"  cards table count:  {count}")
+        print_stale_report(stale)
     finally:
         conn.close()
 

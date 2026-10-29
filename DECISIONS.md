@@ -48,6 +48,7 @@ knowing why it's that way? If not, it doesn't need an entry.
 | [D-032](#d-032--two-backups-snapshots-for-undo-a-json-export-for-moving) | Two backups: snapshots for undo, JSON export for moving | 2026-10-29 |
 | [D-033](#d-033--hosting-moves-from-never-to-later) | Hosting moves from never to later | 2026-10-29 |
 | [D-034](#d-034--ask-only-when-something-is-lost-dry-run-only-on-imports) | Ask only when something is lost; dry-run only on imports | 2026-10-29 |
+| [D-035](#d-035--stale-printings-are-reported-never-deleted) | **Stale printings are reported, never deleted** | 2026-10-29 |
 
 ---
 
@@ -1136,3 +1137,52 @@ the end would undo nothing. The copy is made with SQLite's backup API into a
 temp folder and deleted afterwards; it is 3 MB and takes no noticeable time.
 Snapshots taken during a dry run land in that temp folder too, so they never
 push a real one out of the ten kept.
+
+---
+
+## D-035 — Stale printings are reported, never deleted
+
+**2026-10-29** · *Closes the check [D-029](#d-029--the-api-reuses-printing-ids-sync-resolves-them) planned; protects the art rows of [D-030](#d-030--every-copy-is-somewhere-art-is-recorded-on-the-copy)*
+
+Sync writes what the feed sends. A printing the feed **stops** sending was left
+in `cards` silently, with its old data, forever. That happens three ways: the
+API removes a printing; the API renames one, so a D-029 synthesised id changes
+and the same physical card arrives under a new id; or the API sends an
+incomplete feed. The second is the one with teeth now that copies record their
+art: the owner's copies stay attached to the old row, and the new row looks
+like an art they don't own.
+
+**Every sync now reports the printings it didn't refresh**, owned ones first.
+For each owned one it lists where the copies are, and if exactly one new
+printing of the same card appeared in the same run, it prints the
+`collection set-art ... --from-art ...` command that moves them - tested to
+run as printed. A card the owner has unsorted copies of, or needs in a recipe,
+where *no* printing came back is flagged separately: those rows name only the
+base id, so a per-printing check would miss them. The report repeats every
+sync until the printing returns or the copies are moved; nothing new is stored.
+
+**Stale rows are never deleted - not even the unowned ones.** The owner judged
+the scenario unlikely, but catastrophic if it happens, and asked for this to be
+written down:
+
+> If the API ever sends an incomplete feed, a sync that deleted what it didn't
+> receive would delete hundreds of printings in one run. Unowned rows would come
+> back on the next good sync; but "unowned" is harder than it sounds - a
+> wishlist recipe needs cards nobody owns, unsorted copies name no printing at
+> all - and an owned row cannot be deleted without orphaning copies.
+
+So the rule is absolute: **sync never deletes from `cards`, and a large stale
+count is never cleaned up by hand.** When more than 5% of printings go stale at
+once (`STALE_ALARM_FRACTION`), sync says it is almost certainly a bad feed and
+to sync again later. Measured on 2026-10-29: a live sync against the September
+data lost **0** printings and gained 257 (OP17 arrived); replaying the September
+feed over the October data made 257 stale, 5.5%, and tripped the alarm, which is
+the shape a partial feed would have.
+
+If stale rows ever do pile up, the answer is a deliberate cleanup command the
+owner runs, which reports before it deletes - not sync behaviour.
+
+**Which rows a run refreshed is tracked as a set of ids, not read back from
+`last_synced`.** The timestamp has one-second resolution, so two runs inside
+the same second look like one and report nothing; the first version of this
+check had exactly that bug, caught by its tests.

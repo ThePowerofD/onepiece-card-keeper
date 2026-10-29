@@ -38,15 +38,16 @@ as UI instead of terminal tables. See **D-024** for the reasoning.
 | Sets covered | OP01–OP16, EB01–EB04, ST01–ST30, PRB01–02, promos |
 | Bad rows in logs | none |
 | Owned so far | 51 copies, 1 deck |
-| Tests | 508 passing |
+| Tests | 519 passing |
 
 **Known limitation:** OptcgAPI lags the real game. The game is out to **OP17**;
 the API only has **OP16**. Re-run the sync when it catches up — no code change
 needed.
 
-**Next up:** one remaining safety task before bulk entry — a sync check that
-reports printings that stopped refreshing (especially ones you own). Then the
-rest of [PHASE_2.md](PHASE_2.md) M0: import every sleeved deck.
+**Next up:** the rest of [PHASE_2.md](PHASE_2.md) M0 — import every sleeved
+deck. The safety work before bulk entry is done: backups (D-032), confirmations
+and dry-run (D-034), and a sync that reports printings that stopped refreshing
+instead of losing track of them (D-035).
 
 ---
 
@@ -77,11 +78,14 @@ python -m pytest tests/ --cov=src --cov-report=term-missing   # coverage (99%)
   Unknown sub_types:  0
   Field-shift repairs:3
   cards table count:  4338
+  Stale printings:    0
 ```
 
-...and 508 passing tests. Anything else means something changed upstream —
+...and 519 passing tests. Anything else means something changed upstream —
 `Unknown sub_types` above 0 usually means a new set introduced a card type;
-add it to `SEED_TYPES` in `src/known_types.py` and re-sync.
+add it to `SEED_TYPES` in `src/known_types.py` and re-sync. `Stale printings`
+above 0 means the API stopped sending some rows; they are kept, and if you own
+any the summary says what to do (D-035).
 
 Add `--use-cache` to `python -m src.sync` to reuse the saved JSON in
 `data/cache/` instead of hitting the API. Handy while developing; delete the
@@ -241,7 +245,7 @@ src/
   decks.py        deck import and management
   backup.py       snapshots, and JSON export/import of your own data
   cli.py          argparse entry point over all of the above
-tests/            508 tests
+tests/            519 tests
 data/             optcg.db, cache/ and backups/ (all gitignored)
 ```
 

@@ -280,6 +280,13 @@ flowchart LR
 4,459 raw rows collapse to 4,338 unique printings — the same printing
 legitimately appears in more than one endpoint. Re-running must never duplicate.
 
+**Sync never deletes from `cards`** (D-035). A printing the feed stops sending
+is *stale*: it is reported at the end of every sync — owned ones first, with
+where the copies are and the `set-art` command that moves them to a renamed
+printing — and kept. More than 5% stale in one run means a bad feed, and the
+summary says so. Never clean stale rows up by hand: an incomplete feed would
+look exactly like hundreds of removed cards.
+
 ---
 
 ## 6. Sanitization rules
