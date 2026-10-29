@@ -9,6 +9,68 @@ in Phase 2. (Tauri was dropped before the UI started; see D-023.)
 
 ---
 
+## Getting started
+
+Everything you need to use it. (Developing it? See
+[Developer quickstart](#developer-quickstart).)
+
+**You need** Python 3.10 or newer, and internet for the first sync.
+
+**Once**, about a minute — most of it downloading the cards:
+
+```bash
+git clone https://github.com/ThePowerofD/onepiece-card-keeper.git
+cd onepiece-card-keeper
+python -m venv venv
+venv\Scripts\activate                # Windows; source venv/bin/activate elsewhere
+pip install -r requirements.txt
+
+python -m src.db_setup               # create the database
+python -m src.known_types            # load the card-type list
+python -m src.sync                   # download every card from OptcgAPI
+```
+
+**Every time**, open the shell and type commands without any prefix:
+
+```bash
+python -m src.cli shell
+```
+
+**Three ideas:**
+
+- **Card id** — the code printed on the card, like `OP06-042`. Commands take
+  this, not the name.
+- **Art** — which printing you have (`base`, `p1`, ...). Optional: copies start
+  unsorted and you can say later.
+- **Container** — where a card physically is: a deck, or a location you create.
+  Cards with nowhere named go to `just-loose`.
+
+**Six commands cover almost everything:**
+
+```
+deck import mydeck.txt --name "Reiju"      a sleeved deck - its cards join your collection
+deck show "Reiju"                          what you own vs what's missing
+collection add OP06-060 2                  loose cards you own
+collection show OP06-060                   how many, which arts, where they are
+location add "Binder A" --kind binder      a place to keep cards
+collection move OP06-060 2 --to "Binder A"
+```
+
+Decklists can be Limitless-style or deckbuilder exports — `help deck import`
+shows both. In the shell, `help` is the guide, `help deck` lists a group's
+commands, and `exit` leaves.
+
+**Two habits that keep your data safe:**
+
+- Add `--dry-run` to an import you're unsure of — it shows the result and saves
+  nothing.
+- Run `backup export` at the end of a session. Your decks and collection exist
+  only on your machine; that file is your copy. See [Backups](#backups).
+
+Updating to a new set later is `python -m src.sync` again.
+
+---
+
 ## Where the project is right now
 
 **Last updated: 2026-10-29 — Phase 2, M0 under way: real cards are going in.**
@@ -53,9 +115,9 @@ instead of losing track of them (D-035).
 
 ---
 
-## Quickstart
+## Developer quickstart
 
-From a fresh clone to a working database:
+From a fresh clone to a working database, with the tests:
 
 ```bash
 venv\Scripts\activate                 # Windows; source venv/bin/activate elsewhere
