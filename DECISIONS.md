@@ -46,6 +46,7 @@ knowing why it's that way? If not, it doesn't need an entry.
 | [D-030](#d-030--every-copy-is-somewhere-art-is-recorded-on-the-copy) | **Every copy is somewhere; art is recorded on the copy** | 2026-09-15 |
 | [D-031](#d-031--every-printing-of-a-card-agrees-on-its-gameplay-fields) | **Every printing of a card agrees on its gameplay fields** | 2026-09-15 |
 | [D-032](#d-032--two-backups-snapshots-for-undo-a-json-export-for-moving) | Two backups: snapshots for undo, JSON export for moving | 2026-10-29 |
+| [D-033](#d-033--hosting-moves-from-never-to-later) | Hosting moves from never to later | 2026-10-29 |
 
 ---
 
@@ -1065,3 +1066,24 @@ goal. Nobody uses two machines yet. If that changes, the cheap steps are the
 export kept in a private git repo (history and visible conflicts for free), or
 the `.db` in a synced folder with one machine open at a time. Either way the
 export is the foundation, which is why it names nothing by internal id.
+
+---
+
+## D-033 — Hosting moves from never to later
+
+**2026-10-29** · *Amends DESIGN.md's goals and its "Never" list; leaves [D-023](#d-023--drop-tauri-the-app-is-a-local-web-app) and the Phase 2 plan unchanged*
+
+DESIGN.md listed hosting under **Never**, alongside multi-user and auth. The
+owner wants to keep it open: once the collection is in, using it from more than
+one device is a real wish, and a hosted copy of the web app is the clean answer
+to that - every device opens a browser, and there is nothing to sync (D-032).
+
+It is **possible, not planned**. Nothing in Phase 2 changes: the app stays a
+`localhost` web app with a local SQLite file. Hosting moves to the deferred
+list, and is chosen, if ever, from experience with the app in daily use.
+
+What stays out is **multi-user**. Hosting for one owner's devices still needs
+auth - a login in front of the owner's own data, not accounts - so auth leaves
+the "Never" list with it. What keeps the door open cheaply is what is already
+true: the logic modules don't present (DESIGN.md section 2), so FastAPI can serve
+them from anywhere, and the export names nothing by internal id.

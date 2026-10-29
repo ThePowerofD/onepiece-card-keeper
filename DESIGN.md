@@ -17,9 +17,10 @@ Describes what's **built** — Phase 0 and Phase 1 are both complete.
   (`Character (40)` headers, `(OP06-042)` ids).
 - Distinguish cards locked in sleeved decks from cards free to use.
 - Show deck completion (owned vs missing) for any decklist, including decks you can't yet build.
-- Run locally on one machine — not hosted, not multi-user.
+- Run locally on one machine, for one owner. Hosting it for the owner's own
+  devices is possible later, not planned (D-033); multi-user is not.
 
-**Non-goals (v1):** condition/grading, price history, hosting, multi-user,
+**Non-goals (v1):** condition/grading, price history, hosting (D-033), multi-user,
 Japanese cards, a distributable binary (D-023).
 
 ---
@@ -446,11 +447,13 @@ an `<img>` tag; only the *local cache* is still Phase 5 work.
 win/loss and last-played per deck, deck tags/archetypes, format flag,
 trigger-text parsing for filterable search, DON!! cards, JP-exclusive cards,
 price history, multiple physical owners, multi-machine sync (D-032 — the JSON
-export is the foundation; moving machines already works with it).
+export is the foundation; moving machines already works with it), hosting the
+app for the owner's own devices (D-033 — needs auth, and would answer
+multi-machine sync too).
 
 **Hook exists:** local image cache (Phase 5), auto-detection of new sub-types
 (currently a manual `unknown_type_log` review), and foil-vs-non-foil for the
 *same* printing id (D-030 dropped `foil_quantity` with the `collection` table;
 most foils have their own printing id anyway — see §3 "Printing variants").
 
-**Never:** hosting, multi-user, auth, condition/grading, playtesting/simulation.
+**Never:** multi-user, condition/grading, playtesting/simulation.

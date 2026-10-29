@@ -11,15 +11,19 @@ in Phase 2. (Tauri was dropped before the UI started; see D-023.)
 
 ## Where the project is right now
 
-**Last updated: 2026-09-15 — Phases 0 and 1 complete. Phase 2 re-planned.**
+**Last updated: 2026-10-29 — Phase 2, M0 under way: real cards are going in.**
 
 The card database is built, and the full collection/deck CLI works: import
-Limitless decklists, track what you own at printing level, record where loose
-cards are stored, and see what's missing for a deck you want to build.
+decklists (Limitless or deckbuilder-export format, from a file or pasted in),
+track what you own and which art, record where every copy is, and see what's
+missing for a deck you want to build. `python -m src.cli shell` makes entering
+a lot at once quick.
 
-**Your own collection is still empty** — 4,338 cards synced, zero owned. That is
-the honest state: the backend is finished by tests and has never met a real card.
-Loading it is now the first milestone of Phase 2, ahead of any new code.
+**Real data has started.** The first sleeved deck, Reiju, is in: 51 copies of 18
+cards, arts not yet sorted. From here the database holds data that exists
+nowhere else, so it's protected now (D-032): destructive commands snapshot the
+database first, and `backup export` writes a JSON copy that can be moved to
+another machine.
 
 Phase 2 was re-cut on 2026-09-15 around one sentence — *I open the app, see my
 real cards with images, know where each one is, and can check a decklist against
@@ -28,19 +32,21 @@ as UI instead of terminal tables. See **D-024** for the reasoning.
 
 | | |
 |---|---|
-| Unique printings (`cards`) | 4,338 |
+| Unique printings (`cards`) | 4,455 |
 | Unique gameplay cards (`base_card_id`) | 2,648 |
 | Sets covered | OP01–OP16, EB01–EB04, ST01–ST30, PRB01–02, promos |
 | Bad rows in logs | none |
+| Owned so far | 51 copies, 1 deck |
 | Tests | 492 passing |
 
 **Known limitation:** OptcgAPI lags the real game. The game is out to **OP17**;
 the API only has **OP16**. Re-run the sync when it catches up — no code change
 needed.
 
-**Next up:** [PHASE_2.md](PHASE_2.md) M0 — import your sleeved decks with the CLI
-below. No code; it's the step that turns every remaining design guess into a
-fact, and it bootstraps the collection for free.
+**Next up:** two remaining safety tasks before bulk entry — `--dry-run` and
+confirmation prompts on destructive commands, then a sync check that reports
+printings that stopped refreshing (especially ones you own). Then the rest of
+[PHASE_2.md](PHASE_2.md) M0: import every sleeved deck.
 
 ---
 
