@@ -13,9 +13,9 @@ from __future__ import annotations
 import sqlite3
 import unittest
 
-from src.db_setup import create_schema
-from src.overrides import apply_overrides
-from src.sync import inherit_from_base_printing
+from optcg.db_setup import create_schema
+from optcg.overrides import apply_overrides
+from optcg.sync import inherit_from_base_printing
 
 
 def make_db() -> sqlite3.Connection:
@@ -210,7 +210,7 @@ class OverrideTests(unittest.TestCase):
 
     def test_the_shipped_table_only_names_real_columns(self):
         """A typo'd column name would fail at sync time, not here."""
-        from src.overrides import CARD_OVERRIDES
+        from optcg.overrides import CARD_OVERRIDES
 
         columns = {r[1] for r in self.conn.execute("PRAGMA table_info(cards)")}
         for base_card_id, fields in CARD_OVERRIDES.items():

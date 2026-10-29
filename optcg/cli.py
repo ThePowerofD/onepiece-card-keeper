@@ -1,17 +1,17 @@
 """Command-line interface for the collection and deck manager.
 
-    python -m src.cli deck import mydeck.txt --name "Red Luffy" --physical
-    python -m src.cli deck paste --name "Red Luffy"           # type or paste the list
-    python -m src.cli deck show "Red Luffy"
-    python -m src.cli collection add OP05-097 4              # unsorted, into just-loose
-    python -m src.cli collection move OP05-097 2 --to "Binder A"
-    python -m src.cli collection set-art OP05-097 1 p1 --in "Binder A"
-    python -m src.cli collection show OP05-097
-    python -m src.cli location show "Binder A"
-    python -m src.cli loan OP05-097 1 "Marco"
-    python -m src.cli backup export                           # JSON, to move machines
-    python -m src.cli backup import my_collection.json        # replaces what's here
-    python -m src.cli shell                                   # optcg> prompt, no prefix
+    optcg deck import mydeck.txt --name "Red Luffy" --physical
+    optcg deck paste --name "Red Luffy"           # type or paste the list
+    optcg deck show "Red Luffy"
+    optcg collection add OP05-097 4              # unsorted, into just-loose
+    optcg collection move OP05-097 2 --to "Binder A"
+    optcg collection set-art OP05-097 1 p1 --in "Binder A"
+    optcg collection show OP05-097
+    optcg location show "Binder A"
+    optcg loan OP05-097 1 "Marco"
+    optcg backup export                           # JSON, to move machines
+    optcg backup import my_collection.json        # replaces what's here
+    optcg shell                                   # optcg> prompt, no prefix
 
 Every command takes --db to point at a different SQLite file.
 """
@@ -25,13 +25,14 @@ import sys
 import tempfile
 from pathlib import Path
 
-from src import backup
-from src import collection as coll
-from src import storage as store
-from src.backup import BackupError
-from src.collection import CollectionError
-from src.db_setup import DB_PATH, DEFAULT_LOOSE_LOCATION, connect
-from src.decks import (
+from optcg import backup
+from optcg import collection as coll
+from optcg import storage as store
+from optcg.backup import BackupError
+from optcg.collection import CollectionError
+from optcg.db_setup import DB_PATH, DEFAULT_LOOSE_LOCATION, connect, create_schema
+from optcg.known_types import SEED_TYPES, seed_known_types
+from optcg.decks import (
     DeckError,
     DeckNameExists,
     delete_deck,
@@ -41,7 +42,7 @@ from src.decks import (
     set_physical,
     show_deck,
 )
-from src.storage import StorageError
+from optcg.storage import StorageError
 
 
 def _use_utf8_output() -> None:
@@ -428,10 +429,38 @@ def cmd_backup_import(conn: sqlite3.Connection, args) -> int:
 
 
 # --------------------------------------------------------------------------
+# setup and sync
+# --------------------------------------------------------------------------
+
+def cmd_setup(conn: sqlite3.Connection, args) -> int:
+    """Everything a fresh clone needs, in one command. Safe to re-run: it never resets."""
+    create_schema(conn)
+    print("database ready")
+    return cmd_sync(conn, args)
+
+
+def cmd_sync(conn: sqlite3.Connection, args) -> int:
+    # Imported here: it pulls in the HTTP client, which no other command needs.
+    from optcg.sync import print_summary, run_sync
+
+    # Seeding first means a code update that adds card types needs no extra step.
+    added, _ = seed_known_types(conn, SEED_TYPES)
+    if added:
+        print(f"{added} new card type(s) learned")
+    print("downloading cards from OptcgAPI - this takes about a minute...")
+    stats, stale = run_sync(conn, use_cache=args.use_cache)
+    print_summary(conn, stats, stale)
+    if stats["unknown_types"]:
+        print(f"\n  {stats['unknown_types']} card(s) have a card type this version doesn't know -")
+        print("  a new set probably added some. Update the code and run `optcg sync` again.")
+    return 0
+
+
+# --------------------------------------------------------------------------
 # shell
 # --------------------------------------------------------------------------
 
-SHELL_BANNER = """optcg shell - type commands without the `python -m src.cli` prefix.
+SHELL_BANNER = """optcg shell - type commands without the `optcg` prefix.
   e.g.  collection add OP05-097 4      deck show "Red Luffy"
   help shows the guide, help deck shows the deck commands, exit leaves."""
 
@@ -456,7 +485,7 @@ def run_shell(db: Path) -> int:
     """Read commands until `exit`, running each one as its own CLI call.
 
     Every line gets a fresh connection, so a line behaves exactly as it would
-    typed after `python -m src.cli` - same output, same errors, same commits.
+    typed after `optcg` - same output, same errors, same commits.
     """
     print(SHELL_BANNER)
     while True:
@@ -526,8 +555,8 @@ more help
   help deck import        one command, with examples
 
 The examples are written the way you type them in the shell
-(python -m src.cli shell). Outside it, put 'python -m src.cli' in front:
-  python -m src.cli deck show "Reiju"
+(optcg shell). Outside it, put 'optcg' in front:
+  optcg deck show "Reiju"
 """
 
 ID_HELP = "card id, e.g. OP06-042"
@@ -566,13 +595,14 @@ def _group(sub, name: str, summary: str, description: str, *examples: str):
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="python -m src.cli",
+        prog="optcg",
         description=GUIDE,
         formatter_class=HELP_FORMAT,
     )
     parser.add_argument("--db", type=Path, default=DB_PATH, help=f"SQLite file (default: {DB_PATH})")
+    # Not required: a bare `optcg` opens the shell.
     sub = parser.add_subparsers(
-        dest="group", required=True, title="command groups", metavar="<group>"
+        dest="group", required=False, title="command groups", metavar="<group>"
     )
 
     # ---- deck -----------------------------------------------------------
@@ -900,11 +930,33 @@ def build_parser() -> argparse.ArgumentParser:
     dry_run_option(p)
     p.set_defaults(func=cmd_backup_import)
 
+    # ---- setup and sync -------------------------------------------------
+    p = _command(
+        sub, "setup", "first-time setup: create the database and download every card",
+        "setup",
+        description="Create the database and download every card from OptcgAPI. Run it\n"
+                    "once after installing. Safe to run again - it never deletes anything.",
+    )
+    p.add_argument("--use-cache", action="store_true", help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_setup)
+
+    p = _command(
+        sub, "sync", "download the latest cards - run it when a new set is out",
+        "sync",
+        description="Download the latest cards from OptcgAPI. Your collection and decks\n"
+                    "are never touched, and no card is ever deleted (D-035).",
+    )
+    p.add_argument("--use-cache", action="store_true",
+                   help="reuse the last download in data/cache/ instead of the API")
+    p.set_defaults(func=cmd_sync)
+
     # ---- shell ----------------------------------------------------------
     _command(
         sub, "shell", "type commands one after another, without the prefix",
-        description="Open an optcg> prompt. Type commands without 'python -m src.cli'\n"
-                    "in front; 'help' shows the guide, 'exit' leaves.",
+        "shell",
+        description="Open an optcg> prompt. Type commands without 'optcg' in front;\n"
+                    "'help' shows the guide, 'exit' leaves. Running 'optcg' on its own\n"
+                    "does the same.",
     )
 
     return parser
@@ -918,7 +970,7 @@ def main(argv: list[str] | None = None) -> int:
         print("error: --physical and --wishlist are mutually exclusive", file=sys.stderr)
         return 2
 
-    if args.group == "shell":
+    if args.group in (None, "shell"):
         return run_shell(args.db)
 
     if getattr(args, "dry_run", False):

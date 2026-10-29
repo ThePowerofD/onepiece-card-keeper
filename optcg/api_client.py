@@ -9,9 +9,9 @@ Provides reusable functions for fetching card data:
 Base URL defaults to https://optcgapi.com. Override via OPTCG_API_BASE env var.
 
 CLI:
-    python -m src.api_client                 # print count + 1 sample card
-    python -m src.api_client --use-cache     # cache raw JSON to data/cache/
-    python -m src.api_client --card OP05-097 # fetch one card
+    python -m optcg.api_client                 # print count + 1 sample card
+    python -m optcg.api_client --use-cache     # cache raw JSON to data/cache/
+    python -m optcg.api_client --card OP05-097 # fetch one card
 """
 
 from __future__ import annotations

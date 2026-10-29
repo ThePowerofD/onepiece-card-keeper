@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "optcg-manager"
+version = "0.2.0"
+description = "Personal One Piece TCG collection and deck manager"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["requests>=2.31.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-cov>=5.0"]
+
+# `pip install -e .` puts an `optcg` command on the PATH of the active venv.
+[project.scripts]
+optcg = "optcg.cli:main"
+
+[tool.setuptools]
+packages = ["optcg"]

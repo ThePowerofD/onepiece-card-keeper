@@ -1,4 +1,4 @@
-"""Unit tests for src/sanitize.py — one class per function, edge cases covered.
+"""Unit tests for optcg/sanitize.py — one class per function, edge cases covered.
 
 Run:
     python -m unittest discover tests
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import unittest
 
-from src.sanitize import (
+from optcg.sanitize import (
     detect_keywords,
     extract_printing_variant,
     game_set_from_id,
@@ -261,7 +261,7 @@ class RepairFieldShiftTests(unittest.TestCase):
 class NormalizeCardImageIdTests(unittest.TestCase):
     def test_variant_case_is_folded(self):
         """'OP04-016_P1' and '_p1' are one printing, not two primary keys."""
-        from src.sanitize import normalize_card_image_id as norm
+        from optcg.sanitize import normalize_card_image_id as norm
         self.assertEqual(norm("OP04-016_P1"), "OP04-016_p1")
 
     def test_clean_ids_untouched(self):

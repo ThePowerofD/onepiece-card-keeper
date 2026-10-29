@@ -1,4 +1,4 @@
-"""Tests for src/api_client.py.
+"""Tests for optcg/api_client.py.
 
 The network is always stubbed - these tests never touch optcgapi.com.
 
@@ -16,8 +16,8 @@ from unittest import mock
 
 import requests
 
-from src import api_client
-from src.api_client import (
+from optcg import api_client
+from optcg.api_client import (
     ApiError,
     _get_json,
     _unwrap_list,
@@ -173,11 +173,11 @@ class FetchCardByIdTests(unittest.TestCase):
             self.assertIsNone(fetch_card_by_id("OP05-097"))
 
     def test_404_returns_none_rather_than_raising(self):
-        with mock.patch("src.api_client._get_json", side_effect=ApiError("404 Not Found")):
+        with mock.patch("optcg.api_client._get_json", side_effect=ApiError("404 Not Found")):
             self.assertIsNone(fetch_card_by_id("ZZ99-999"))
 
     def test_other_errors_still_raise(self):
-        with mock.patch("src.api_client._get_json", side_effect=ApiError("500 Server Error")):
+        with mock.patch("optcg.api_client._get_json", side_effect=ApiError("500 Server Error")):
             with self.assertRaises(ApiError):
                 fetch_card_by_id("OP05-097")
 
@@ -235,7 +235,7 @@ class ApiClientCliTests(unittest.TestCase):
         self.assertIn("OP05-097", output)
 
     def test_single_card_not_found(self):
-        with mock.patch("src.api_client._get_json", side_effect=ApiError("404")):
+        with mock.patch("optcg.api_client._get_json", side_effect=ApiError("404")):
             output = self.run_main("--card", "ZZ99-999")
         self.assertIn("No card found", output)
 

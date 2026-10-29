@@ -1,4 +1,4 @@
-"""Unit tests for src/decks.py (import).
+"""Unit tests for optcg/decks.py (import).
 
 Run:
     python -m pytest tests/test_decks.py -v
@@ -10,10 +10,10 @@ import sqlite3
 import unittest
 from unittest import mock
 
-from src.db_setup import create_schema
-from src.storage import deck_container, loose_container
-from src.collection import add, move, show, total_owned
-from src.decks import (
+from optcg.db_setup import create_schema
+from optcg.storage import deck_container, loose_container
+from optcg.collection import add, move, show, total_owned
+from optcg.decks import (
     DeckError,
     DeckNameExists,
     delete_deck,
@@ -308,10 +308,10 @@ class AtomicityTests(unittest.TestCase):
             calls["n"] += 1
             if calls["n"] > 3:
                 raise sqlite3.OperationalError("simulated failure")
-            from src.collection import deposit as real_deposit
+            from optcg.collection import deposit as real_deposit
             return real_deposit(conn, base_card_id, quantity, container, art)
 
-        with mock.patch("src.decks.deposit", side_effect=exploding_deposit):
+        with mock.patch("optcg.decks.deposit", side_effect=exploding_deposit):
             with self.assertRaises(sqlite3.OperationalError):
                 import_decklist(self.conn, decklist(), "Red Luffy", is_physical=True)
 
@@ -325,7 +325,7 @@ class AtomicityTests(unittest.TestCase):
     def test_failed_replace_keeps_the_original_deck(self):
         first = import_decklist(self.conn, decklist(), "Red Luffy", is_physical=True)
 
-        with mock.patch("src.decks.deposit", side_effect=sqlite3.OperationalError("boom")):
+        with mock.patch("optcg.decks.deposit", side_effect=sqlite3.OperationalError("boom")):
             with self.assertRaises(sqlite3.OperationalError):
                 counts = {f"OP05-{i:03d}": 4 for i in range(1, 13)}
                 counts["OP05-013"] = 3

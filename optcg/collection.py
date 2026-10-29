@@ -18,7 +18,7 @@ from __future__ import annotations
 import sqlite3
 from typing import NamedTuple
 
-from src.storage import Container, loose_container
+from optcg.storage import Container, loose_container
 
 
 class CollectionError(Exception):

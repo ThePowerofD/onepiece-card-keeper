@@ -1,4 +1,4 @@
-"""Unit tests for src/collisions.py (D-029).
+"""Unit tests for optcg/collisions.py (D-029).
 
 Fixtures are the real shapes the API serves, trimmed to the fields that matter.
 
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import unittest
 
-from src.collisions import (
+from optcg.collisions import (
     core_name,
     filename_id,
     kind_for,

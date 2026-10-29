@@ -31,7 +31,7 @@ from __future__ import annotations
 import re
 from typing import NamedTuple
 
-from src.sanitize import strip_printing_suffix
+from optcg.sanitize import strip_printing_suffix
 
 # Headers that introduce a section. DON!! is recognised only so it can be
 # discarded — DON cards are out of scope entirely (D-002).

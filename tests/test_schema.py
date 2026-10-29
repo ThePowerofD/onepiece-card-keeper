@@ -14,9 +14,9 @@ from __future__ import annotations
 import sqlite3
 import unittest
 
-from src.collection import add, move, show
-from src.db_setup import DEFAULT_LOOSE_LOCATION, create_schema
-from src.storage import deck_container, loose_container
+from optcg.collection import add, move, show
+from optcg.db_setup import DEFAULT_LOOSE_LOCATION, create_schema
+from optcg.storage import deck_container, loose_container
 
 
 def make_db() -> sqlite3.Connection:
@@ -225,7 +225,7 @@ class AvailabilityTests(unittest.TestCase):
 
     def test_you_cannot_commit_more_than_you_own(self):
         """Structural under D-030: a committed copy *is* a copy you own."""
-        from src.collection import CollectionError
+        from optcg.collection import CollectionError
 
         with self.assertRaises(CollectionError):
             self.sleeve("Greedy", 6)

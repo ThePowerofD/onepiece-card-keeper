@@ -15,8 +15,11 @@ what the system *is*, read the docs below rather than restating them here.
 ```bash
 venv\Scripts\activate
 
-python -m src.db_setup --reset && python -m src.known_types && python -m src.sync
-python -m src.sync --use-cache        # reuse data/cache/, skip the API
+pip install -e ".[dev]"                # once per venv: the `optcg` command + pytest
+
+optcg setup                            # schema + card types + cards; never resets
+optcg sync --use-cache                 # reuse data/cache/, skip the API
+python -m optcg.db_setup --reset       # WIPES the owner's data too - see Gotchas
 
 python -m pytest tests/ -v
 python -m pytest tests/test_sanitize.py::ToIntTests
@@ -24,7 +27,7 @@ python -m pytest tests/test_sanitize.py::ToIntTests
 
 ## Conventions
 
-- **Sanitization rules are pure.** New rules go in `src/sanitize.py` as standalone
+- **Sanitization rules are pure.** New rules go in `optcg/sanitize.py` as standalone
   functions with no DB access, plus tests in `tests/test_sanitize.py`.
 - **Log, don't crash.** Bad API rows go to `skipped_cards_log` or
   `unknown_type_log` — never raise on third-party data.
@@ -42,7 +45,7 @@ python -m pytest tests/test_sanitize.py::ToIntTests
 - The API lags the real game (it caught up to OP17 by 2026-10-29). Ids from a
   newer set are missing until it catches up. Not a bug.
 - New card types appear with new sets. When `unknown_type_log` is non-empty after
-  a sync, add them to `SEED_TYPES` in `src/known_types.py` and re-sync.
+  a sync, add them to `SEED_TYPES` in `optcg/known_types.py` and re-sync.
 - **Never delete stale printings** — rows the last sync didn't refresh (D-035).
   A large stale count means the API sent an incomplete feed, not that cards were
   removed. Sync again later; don't "clean up", even if asked to tidy the catalog,

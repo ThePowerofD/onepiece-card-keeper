@@ -1,4 +1,4 @@
-"""Tests for src/sync.py — the fetch/sanitize/upsert orchestrator.
+"""Tests for optcg/sync.py — the fetch/sanitize/upsert orchestrator.
 
 Covers the parts that actually decide what lands in `cards`: field aliasing,
 row sanitization, the log-don't-crash contract, and idempotency.
@@ -18,12 +18,12 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from src import collection as coll
-from src import storage as store
-from src.cli import main as cli_main
-from src.db_setup import connect, create_schema
-from src.known_types import SEED_TYPES, seed_known_types
-from src.sync import (
+from optcg import collection as coll
+from optcg import storage as store
+from optcg.cli import main as cli_main
+from optcg.db_setup import connect, create_schema
+from optcg.known_types import SEED_TYPES, seed_known_types
+from optcg.sync import (
     FIELD_ALIASES,
     STALE_ALARM_FRACTION,
     pick,
@@ -193,9 +193,9 @@ class SyncTests(unittest.TestCase):
         self.conn.close()
 
     def run_sync(self, set_cards=None, st_cards=None, promos=None):
-        with mock.patch("src.sync.fetch_all_set_cards", return_value=set_cards or []), \
-             mock.patch("src.sync.fetch_all_st_cards", return_value=st_cards or []), \
-             mock.patch("src.sync.fetch_all_promos", return_value=promos or []):
+        with mock.patch("optcg.sync.fetch_all_set_cards", return_value=set_cards or []), \
+             mock.patch("optcg.sync.fetch_all_st_cards", return_value=st_cards or []), \
+             mock.patch("optcg.sync.fetch_all_promos", return_value=promos or []):
             return sync(self.conn)
 
     def test_inserts_cards_and_types(self):
@@ -280,7 +280,7 @@ class SyncTests(unittest.TestCase):
 
 
 class SyncCliTests(unittest.TestCase):
-    """`python -m src.sync` - the command the README tells you to run."""
+    """`python -m optcg.sync` - the command the README tells you to run."""
 
     def run_main(self, rows, *argv) -> str:
         import io
@@ -288,7 +288,7 @@ class SyncCliTests(unittest.TestCase):
         from contextlib import redirect_stdout
         from pathlib import Path
 
-        from src import db_setup, known_types, sync as sync_module
+        from optcg import db_setup, known_types, sync as sync_module
 
         with tempfile.TemporaryDirectory() as tmp:
             db = str(Path(tmp) / "x.db")
@@ -298,9 +298,9 @@ class SyncCliTests(unittest.TestCase):
                 known_types.main()
 
             out = io.StringIO()
-            with mock.patch("src.sync.fetch_all_set_cards", return_value=rows), \
-                 mock.patch("src.sync.fetch_all_st_cards", return_value=[]), \
-                 mock.patch("src.sync.fetch_all_promos", return_value=[]), \
+            with mock.patch("optcg.sync.fetch_all_set_cards", return_value=rows), \
+                 mock.patch("optcg.sync.fetch_all_st_cards", return_value=[]), \
+                 mock.patch("optcg.sync.fetch_all_promos", return_value=[]), \
                  mock.patch("sys.argv", ["sync", "--db", db, *argv]), \
                  redirect_stdout(out):
                 sync_module.main()
@@ -347,7 +347,7 @@ class StalePrintingTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def run_sync(self, rows):
-        with mock.patch("src.sync.fetch_all_set_cards", return_value=rows),              mock.patch("src.sync.fetch_all_st_cards", return_value=[]),              mock.patch("src.sync.fetch_all_promos", return_value=[]),              redirect_stdout(io.StringIO()):
+        with mock.patch("optcg.sync.fetch_all_set_cards", return_value=rows),              mock.patch("optcg.sync.fetch_all_st_cards", return_value=[]),              mock.patch("optcg.sync.fetch_all_promos", return_value=[]),              redirect_stdout(io.StringIO()):
             return run_sync(self.conn)
 
     def own(self, art: str, quantity: int, where: str | None = None) -> None:
@@ -404,7 +404,7 @@ class StalePrintingTests(unittest.TestCase):
         with redirect_stdout(out):
             print_stale_report(report)
         line = next(l for l in out.getvalue().splitlines() if "collection set-art" in l)
-        argv = shlex.split(line.strip())[3:]  # drop "python -m src.cli"
+        argv = shlex.split(line.strip())[1:]  # drop "optcg"
         with redirect_stdout(io.StringIO()):
             self.assertEqual(cli_main(["--db", str(self.db), *argv]), 0)
 

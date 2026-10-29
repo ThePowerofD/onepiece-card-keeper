@@ -1,4 +1,4 @@
-"""Unit tests for src/storage.py — containers and locations (D-025, D-030).
+"""Unit tests for optcg/storage.py — containers and locations (D-025, D-030).
 
 Run:
     python -m pytest tests/test_storage.py -v
@@ -9,9 +9,9 @@ from __future__ import annotations
 import sqlite3
 import unittest
 
-from src.collection import add, total_owned
-from src.db_setup import DEFAULT_LOOSE_LOCATION, create_schema
-from src.storage import (
+from optcg.collection import add, total_owned
+from optcg.db_setup import DEFAULT_LOOSE_LOCATION, create_schema
+from optcg.storage import (
     AmbiguousLocation,
     LOCATION_KINDS,
     StorageError,

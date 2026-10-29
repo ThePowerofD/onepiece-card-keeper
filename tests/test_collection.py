@@ -1,4 +1,4 @@
-"""Unit tests for src/collection.py — the copy model (D-030).
+"""Unit tests for optcg/collection.py — the copy model (D-030).
 
 Run:
     python -m pytest tests/test_collection.py -v
@@ -9,7 +9,7 @@ from __future__ import annotations
 import sqlite3
 import unittest
 
-from src.collection import (
+from optcg.collection import (
     CollectionError,
     add,
     committed,
@@ -23,8 +23,8 @@ from src.collection import (
     show,
     total_owned,
 )
-from src.db_setup import create_schema
-from src.storage import add_location, deck_container, loose_container, resolve_container
+from optcg.db_setup import create_schema
+from optcg.storage import add_location, deck_container, loose_container, resolve_container
 
 
 def make_db() -> sqlite3.Connection:

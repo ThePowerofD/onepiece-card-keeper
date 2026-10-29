@@ -1,4 +1,4 @@
-"""Unit tests for src/rotation.py (D-027).
+"""Unit tests for optcg/rotation.py (D-027).
 
 SET_BLOCKS is empty by design, so these tests pin the *tri-state* contract
 rather than any particular mapping: "unknown" must never read as "illegal".
@@ -12,8 +12,8 @@ from __future__ import annotations
 import unittest
 import unittest.mock
 
-from src import rotation
-from src.rotation import ROTATION_LEGAL_FROM, block_for, is_rotation_legal
+from optcg import rotation
+from optcg.rotation import ROTATION_LEGAL_FROM, block_for, is_rotation_legal
 
 
 class BlockForTests(unittest.TestCase):

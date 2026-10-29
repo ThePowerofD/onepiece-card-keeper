@@ -1,4 +1,4 @@
-"""Unit tests for src/deck_parser.py.
+"""Unit tests for optcg/deck_parser.py.
 
 Run:
     python -m pytest tests/test_deck_parser.py -v
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import unittest
 
-from src.deck_parser import (
+from optcg.deck_parser import (
     DeckCard,
     parse_card_line,
     parse_decklist,

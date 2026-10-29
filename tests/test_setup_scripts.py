@@ -1,4 +1,4 @@
-"""Tests for src/db_setup.py and src/known_types.py, including their CLIs.
+"""Tests for optcg/db_setup.py and optcg/known_types.py, including their CLIs.
 
 Run:
     python -m pytest tests/test_setup_scripts.py -v
@@ -14,8 +14,8 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from src import db_setup, known_types
-from src.db_setup import (
+from optcg import db_setup, known_types
+from optcg.db_setup import (
     INDEXES,
     LEGACY_VIEW_NAMES,
     TABLE_NAMES,
@@ -24,7 +24,7 @@ from src.db_setup import (
     create_schema,
     drop_all,
 )
-from src.known_types import SEED_TYPES, list_known_types, seed_known_types
+from optcg.known_types import SEED_TYPES, list_known_types, seed_known_types
 
 
 class SchemaCreationTests(unittest.TestCase):

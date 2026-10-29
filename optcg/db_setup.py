@@ -1,8 +1,8 @@
 """Create or reset the SQLite schema for the OPTCG manager.
 
 Run:
-    python -m src.db_setup            # create if missing (idempotent)
-    python -m src.db_setup --reset    # drop everything and recreate
+    python -m optcg.db_setup            # create if missing (idempotent)
+    python -m optcg.db_setup --reset    # drop everything and recreate
 
 --reset snapshots the database into data/backups/ first whenever it holds
 decks, copies or locations (D-032).
@@ -248,7 +248,7 @@ def main() -> None:
     try:
         if args.reset:
             # Imported here: backup imports this module for the loose pile's name.
-            from src.backup import auto_snapshot
+            from optcg.backup import auto_snapshot
 
             saved = auto_snapshot(conn, "before-reset")
             if saved:

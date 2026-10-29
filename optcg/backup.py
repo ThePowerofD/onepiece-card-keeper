@@ -24,8 +24,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple
 
-from src.db_setup import DEFAULT_LOOSE_LOCATION
-from src.storage import LOCATION_KINDS
+from optcg.db_setup import DEFAULT_LOOSE_LOCATION
+from optcg.storage import LOCATION_KINDS
 
 EXPORT_FORMAT = "optcg-collection"
 EXPORT_VERSION = 1

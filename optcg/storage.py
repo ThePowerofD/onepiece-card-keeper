@@ -15,7 +15,7 @@ from __future__ import annotations
 import sqlite3
 from typing import NamedTuple
 
-from src.db_setup import DEFAULT_LOOSE_LOCATION
+from optcg.db_setup import DEFAULT_LOOSE_LOCATION
 
 
 class StorageError(Exception):
@@ -86,7 +86,7 @@ def loose_container(conn: sqlite3.Connection) -> Container:
     if row is None:
         raise StorageError(
             f"the built-in {DEFAULT_LOOSE_LOCATION!r} location is missing - "
-            f"run `python -m src.db_setup` to recreate it"
+            f"run `optcg setup` to recreate it"
         )
     return Container(row[0], None, "loose", DEFAULT_LOOSE_LOCATION)
 
@@ -235,8 +235,8 @@ def delete_location(conn: sqlite3.Connection, name: str, kind: str | None = None
     container = resolve_container(conn, name, kind, allow_deck=False)
     # Imported here, not at module scope: collection and backup both import
     # this module, so a top-level import would be circular.
-    from src.backup import auto_snapshot
-    from src.collection import empty_container
+    from optcg.backup import auto_snapshot
+    from optcg.collection import empty_container
 
     auto_snapshot(conn, "before-location-delete")
     try:

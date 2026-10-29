@@ -1,4 +1,4 @@
-"""Smoke tests for src/cli.py.
+"""Smoke tests for optcg/cli.py.
 
 Exercises argument wiring and exit codes rather than re-testing the modules
 underneath, which have their own suites.
@@ -17,8 +17,8 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from src.cli import main
-from src.db_setup import create_schema
+from optcg.cli import main
+from optcg.db_setup import create_schema
 
 LEADER = "OP05-100"
 
@@ -389,7 +389,7 @@ class CliEdgeTests(CliTestCase):
         self.assertIn("no cards matched", out)
 
     def test_keyboard_interrupt_exits_cleanly(self):
-        with mock.patch("src.cli.cmd_deck_list", side_effect=KeyboardInterrupt):
+        with mock.patch("optcg.cli.cmd_deck_list", side_effect=KeyboardInterrupt):
             code, _, err = self.run_cli("deck", "list")
         self.assertEqual(code, 130)
         self.assertIn("cancelled", err)
@@ -639,3 +639,64 @@ class DryRunTests(CliTestCase):
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             main(["--db", str(self.db), "collection", "add", "OP05-001", "1", "--dry-run"])
         self.assertEqual(self.owned(), 0)
+
+
+class SetupCommandTests(unittest.TestCase):
+    """`optcg setup` and `optcg sync` - one command for what used to be three."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Path(self.tmp.name) / "fresh.db"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_cli(self, *argv) -> tuple[int, str]:
+        row = {"card_image_id": "OP05-097", "card_set_id": "OP05-097", "card_name": "Luffy",
+               "card_type": "Character", "sub_types": "Straw Hat Crew", "set_id": "OP-05"}
+        out = io.StringIO()
+        with mock.patch("optcg.sync.fetch_all_set_cards", return_value=[row]), \
+             mock.patch("optcg.sync.fetch_all_st_cards", return_value=[]), \
+             mock.patch("optcg.sync.fetch_all_promos", return_value=[]), \
+             redirect_stdout(out):
+            code = main(["--db", str(self.db), *argv])
+        return code, out.getvalue()
+
+    def test_setup_builds_a_working_database_from_nothing(self):
+        code, out = self.run_cli("setup")
+        self.assertEqual(code, 0)
+        self.assertIn("cards table count:  1", out)
+        code, out = self.run_cli("collection", "add", "OP05-097", "2")
+        self.assertEqual(code, 0)
+
+    def test_setup_twice_keeps_your_data(self):
+        self.run_cli("setup")
+        self.run_cli("collection", "add", "OP05-097", "2")
+        self.run_cli("setup")
+        _, out = self.run_cli("collection", "show", "OP05-097")
+        self.assertIn("owned 2", out)
+
+    def test_sync_learns_new_card_types_by_itself(self):
+        self.run_cli("setup")
+        conn = sqlite3.connect(self.db)
+        conn.execute("DELETE FROM known_types WHERE type_name = 'Straw Hat Crew'")
+        conn.commit()
+        conn.close()
+        _, out = self.run_cli("sync")
+        self.assertIn("1 new card type(s) learned", out)
+        self.assertIn("Unknown sub_types:  0", out)
+
+
+class EntryPointTests(CliTestCase):
+    def test_no_arguments_opens_the_shell(self):
+        with mock.patch("builtins.input", side_effect=EOFError):
+            code, out, _ = self.run_cli()
+        self.assertEqual(code, 0)
+        self.assertIn("optcg shell", out)
+
+    def test_help_is_written_for_the_optcg_command(self):
+        out = io.StringIO()
+        with redirect_stdout(out), self.assertRaises(SystemExit):
+            main(["--help"])
+        self.assertIn("usage: optcg", out.getvalue())
+        self.assertNotIn("src.cli", out.getvalue())

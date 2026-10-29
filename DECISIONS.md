@@ -49,6 +49,7 @@ knowing why it's that way? If not, it doesn't need an entry.
 | [D-033](#d-033--hosting-moves-from-never-to-later) | Hosting moves from never to later | 2026-10-29 |
 | [D-034](#d-034--ask-only-when-something-is-lost-dry-run-only-on-imports) | Ask only when something is lost; dry-run only on imports | 2026-10-29 |
 | [D-035](#d-035--stale-printings-are-reported-never-deleted) | **Stale printings are reported, never deleted** | 2026-10-29 |
+| [D-036](#d-036--the-command-is-optcg-the-package-is-optcg) | The command is `optcg`; the package is `optcg` | 2026-10-29 |
 
 ---
 
@@ -1186,3 +1187,39 @@ owner runs, which reports before it deletes - not sync behaviour.
 `last_synced`.** The timestamp has one-second resolution, so two runs inside
 the same second look like one and report nothing; the first version of this
 check had exactly that bug, caught by its tests.
+
+---
+
+## D-036 — The command is `optcg`; the package is `optcg`
+
+**2026-10-29** · *Renames `src/` to `optcg/` - every earlier entry's `src/...` path now lives under `optcg/`*
+
+Reviewing the CLI as a stranger cloning from GitHub would meet it, the owner
+asked whether it should really be called `src.cli`. It shouldn't:
+`python -m src.cli deck show "Reiju"` is long, and `src` is the name of a
+folder, not of anything a user thinks about.
+
+**The command is `optcg`**, a console script declared in `pyproject.toml` and
+installed with `pip install -e .`. It works from any directory while the venv
+is active, and **`optcg` on its own opens the shell** - the common case, entering
+cards one after another, is one word. `python -m optcg` is the same thing
+without installing.
+
+**That forced the package rename.** Installing a package makes its top-level
+name importable everywhere in the venv, and `src` is what every project using
+the src-layout convention is called; installing one named `src` is asking for
+a collision. So `src/` became `optcg/`, and `from src.x` became `from optcg.x`
+throughout. The rename was mechanical - the 519 tests passed unchanged apart
+from one that parsed the printed command. It was done before `optcg/web/`
+exists, which is when it was cheapest. `python -m src.cli` no longer works.
+
+**Install is editable on purpose.** `DB_PATH` resolves relative to the package
+(`data/optcg.db` beside it), so the database stays in the clone. A non-editable
+install would put it in `site-packages`.
+
+**First-time setup is one command, `optcg setup`**, replacing `db_setup`,
+`known_types` and `sync` run in order. It never resets, so running it twice is
+harmless. **`optcg sync` seeds the card types before fetching**: a code update
+that adds a new set's types then needs no extra step. The three module entry
+points stay for development; `db_setup --reset` in particular is deliberately
+not reachable from `optcg`.

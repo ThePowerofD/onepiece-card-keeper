@@ -23,18 +23,34 @@ git clone https://github.com/ThePowerofD/onepiece-card-keeper.git
 cd onepiece-card-keeper
 python -m venv venv
 venv\Scripts\activate                # Windows; source venv/bin/activate elsewhere
-pip install -r requirements.txt
+pip install -e .                     # installs the `optcg` command
 
-python -m src.db_setup               # create the database
-python -m src.known_types            # load the card-type list
-python -m src.sync                   # download every card from OptcgAPI
+optcg setup                          # create the database, download every card
 ```
 
-**Every time**, open the shell and type commands without any prefix:
+**Every time**, activate the venv and type `optcg`. That opens the shell, where
+you type commands one after another without any prefix:
 
-```bash
-python -m src.cli shell
 ```
+optcg
+optcg> deck show "Reiju"
+optcg> exit
+```
+
+Every command also works on its own line from the terminal, with `optcg` in
+front: `optcg deck show "Reiju"`.
+
+**Help is built in, at three levels**, and every level ends with examples:
+
+```
+help                     the guide: how it fits together, and where to start
+help collection          every command in a group, one line each
+help collection add      one command: what it does, its options, examples
+```
+
+In the shell type them as shown; from the terminal add `--help` instead
+(`optcg collection add --help`). If you get a command wrong, it shows you that
+command's usage, so you can fix it and re-run.
 
 **Three ideas:**
 
@@ -57,8 +73,7 @@ collection move OP06-060 2 --to "Binder A"
 ```
 
 Decklists can be Limitless-style or deckbuilder exports — `help deck import`
-shows both. In the shell, `help` is the guide, `help deck` lists a group's
-commands, and `exit` leaves.
+shows both.
 
 **Two habits that keep your data safe:**
 
@@ -67,7 +82,8 @@ commands, and `exit` leaves.
 - Run `backup export` at the end of a session. Your decks and collection exist
   only on your machine; that file is your copy. See [Backups](#backups).
 
-Updating to a new set later is `python -m src.sync` again.
+When a new set comes out, `optcg sync` downloads it. Your collection is never
+touched.
 
 ---
 
@@ -78,7 +94,7 @@ Updating to a new set later is `python -m src.sync` again.
 The card database is built, and the full collection/deck CLI works: import
 decklists (Limitless or deckbuilder-export format, from a file or pasted in),
 track what you own and which art, record where every copy is, and see what's
-missing for a deck you want to build. `python -m src.cli shell` makes entering
+missing for a deck you want to build. `optcg shell` makes entering
 a lot at once quick.
 
 **Real data has started.** The first sleeved deck, Reiju, is in: 51 copies of 18
@@ -121,15 +137,12 @@ From a fresh clone to a working database, with the tests:
 
 ```bash
 venv\Scripts\activate                 # Windows; source venv/bin/activate elsewhere
-pip install -r requirements.txt -r requirements-dev.txt
+pip install -e ".[dev]"               # the optcg command, plus pytest
 
-python -m src.db_setup --reset        # create the schema (drops any existing DB,
-                                      # after snapshotting your data if it has any)
-python -m src.known_types             # seed the card-type vocabulary
-python -m src.sync                    # fetch all cards from OptcgAPI
+optcg setup                           # schema + card types + every card (never resets)
 
 python -m pytest tests/ -v
-python -m pytest tests/ --cov=src --cov-report=term-missing   # coverage (99%)
+python -m pytest tests/ --cov=optcg --cov-report=term-missing   # coverage (99%)
 ```
 
 **Verify it worked.** You should see:
@@ -147,11 +160,11 @@ python -m pytest tests/ --cov=src --cov-report=term-missing   # coverage (99%)
 
 ...and 519 passing tests. Anything else means something changed upstream —
 `Unknown sub_types` above 0 usually means a new set introduced a card type;
-add it to `SEED_TYPES` in `src/known_types.py` and re-sync. `Stale printings`
+add it to `SEED_TYPES` in `optcg/known_types.py` and re-sync. `Stale printings`
 above 0 means the API stopped sending some rows; they are kept, and if you own
 any the summary says what to do (D-035).
 
-Add `--use-cache` to `python -m src.sync` to reuse the saved JSON in
+Add `--use-cache` to `optcg sync` to reuse the saved JSON in
 `data/cache/` instead of hitting the API. Handy while developing; delete the
 cache files to force a fresh fetch.
 
@@ -165,7 +178,7 @@ nowhere else. See [Backups](#backups).
 
 Everything runs through one entry point. `--help` works at every level.
 
-For entering a lot at once, `python -m src.cli shell` opens an `optcg>` prompt
+For entering a lot at once, `optcg shell` opens an `optcg>` prompt
 that takes the same commands without the prefix, until `exit`:
 
 ```
@@ -179,45 +192,45 @@ Inside the shell, `help` shows a getting-started guide, and `help deck` or
 
 ```bash
 # Decks — importing a sleeved deck also credits your collection
-python -m src.cli deck import mydeck.txt --name "Red Luffy" --physical
-python -m src.cli deck import wanted.txt --name "Purple Doffy" --wishlist
-python -m src.cli deck paste --name "Red Luffy"  # type/paste the list, finish with: end
-python -m src.cli deck list
-python -m src.cli deck show "Red Luffy"          # owned vs missing per card
-python -m src.cli deck set-physical "Purple Doffy"
-python -m src.cli deck delete "Red Luffy"        # asks first; copies return to just-loose
-python -m src.cli deck import new.txt --name "Enel" --dry-run   # see the result, save nothing
+optcg deck import mydeck.txt --name "Red Luffy" --physical
+optcg deck import wanted.txt --name "Purple Doffy" --wishlist
+optcg deck paste --name "Red Luffy"  # type/paste the list, finish with: end
+optcg deck list
+optcg deck show "Red Luffy"          # owned vs missing per card
+optcg deck set-physical "Purple Doffy"
+optcg deck delete "Red Luffy"        # asks first; copies return to just-loose
+optcg deck import new.txt --name "Enel" --dry-run   # see the result, save nothing
 
 # Collection — you own gameplay cards; the art is optional detail
-python -m src.cli collection add OP05-097 4                  # unsorted, into just-loose
-python -m src.cli collection add OP05-097 2 --art p1 --to "Mewtwo Binder"
-python -m src.cli collection move OP05-097 2 --to "Mewtwo Binder"
-python -m src.cli collection move OP05-097 4 --from "Red Luffy" --from-kind deck --to just-loose
-python -m src.cli collection set-art OP05-097 1 p1 --in "Mewtwo Binder"
-python -m src.cli collection remove OP05-097 1               # sold or traded away
-python -m src.cli collection show OP05-097       # arts, containers, totals
-python -m src.cli collection list --set OP05 --owned-only
-python -m src.cli collection list --search "Luffy"
+optcg collection add OP05-097 4                  # unsorted, into just-loose
+optcg collection add OP05-097 2 --art p1 --to "Mewtwo Binder"
+optcg collection move OP05-097 2 --to "Mewtwo Binder"
+optcg collection move OP05-097 4 --from "Red Luffy" --from-kind deck --to just-loose
+optcg collection set-art OP05-097 1 p1 --in "Mewtwo Binder"
+optcg collection remove OP05-097 1               # sold or traded away
+optcg collection show OP05-097       # arts, containers, totals
+optcg collection list --set OP05 --owned-only
+optcg collection list --search "Luffy"
 
 # Storage — where the copies physically are.
 # Every location has a --kind: storage | binder | loose | loan
-python -m src.cli location add "OP13 Box" --kind storage
-python -m src.cli location add "Mewtwo Binder" --kind binder --notes "alt arts"
-python -m src.cli location add "Friend 1" --kind loan
-python -m src.cli location list                  # grouped by kind
-python -m src.cli location show "Mewtwo Binder"  # what's in it, art by art
-python -m src.cli location show                  # defaults to just-loose
-python -m src.cli location rename "OP13 Box" "OP13 Storage"
-python -m src.cli location delete "OP13 Storage" # asks first if it holds copies
+optcg location add "OP13 Box" --kind storage
+optcg location add "Mewtwo Binder" --kind binder --notes "alt arts"
+optcg location add "Friend 1" --kind loan
+optcg location list                  # grouped by kind
+optcg location show "Mewtwo Binder"  # what's in it, art by art
+optcg location show                  # defaults to just-loose
+optcg location rename "OP13 Box" "OP13 Storage"
+optcg location delete "OP13 Storage" # asks first if it holds copies
 
 # Loans — the card is still yours, it's just somewhere else
-python -m src.cli loan OP05-097 1 "Friend 1" --art p1
+optcg loan OP05-097 1 "Friend 1" --art p1
 
 # Backups — see below
-python -m src.cli backup export my_collection.json
-python -m src.cli backup import my_collection.json   # REPLACES what's here; asks first
-python -m src.cli backup snapshot --label before-sorting
-python -m src.cli backup list
+optcg backup export my_collection.json
+optcg backup import my_collection.json   # REPLACES what's here; asks first
+optcg backup snapshot --label before-sorting
+optcg backup list
 ```
 
 **Names are unique per kind, not globally** — a box and a binder can both be
@@ -283,12 +296,12 @@ You can't move a card you don't own yet, and you own nothing until a deck import
 or an `add` puts copies in.
 
 ```bash
-python -m src.cli deck import mydeck.txt --name "Red Luffy" --physical
-python -m src.cli location add "Binder A" --kind binder
-python -m src.cli collection add OP05-097 2                  # into just-loose
-python -m src.cli collection move OP05-097 2 --to "Binder A"
-python -m src.cli collection show OP05-097   # where they are, and which arts
-python -m src.cli deck show "Red Luffy"      # owned, sleeved, missing
+optcg deck import mydeck.txt --name "Red Luffy" --physical
+optcg location add "Binder A" --kind binder
+optcg collection add OP05-097 2                  # into just-loose
+optcg collection move OP05-097 2 --to "Binder A"
+optcg collection show OP05-097   # where they are, and which arts
+optcg deck show "Red Luffy"      # owned, sleeved, missing
 ```
 
 ---
@@ -296,7 +309,7 @@ python -m src.cli deck show "Red Luffy"      # owned, sleeved, missing
 ## Layout
 
 ```
-src/
+optcg/
   db_setup.py     schema creation; connect() is the shared connection factory
   api_client.py   OptcgAPI HTTP client (three endpoints)
   sanitize.py     pure cleaning functions, one per rule — no DB, no side effects

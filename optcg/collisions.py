@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import re
 
-from src.sanitize import (
+from optcg.sanitize import (
     game_set_from_id,
     normalize_card_image_id,
     normalize_null,

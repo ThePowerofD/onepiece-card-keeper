@@ -1,4 +1,4 @@
-"""Tests for src/backup.py — snapshots, export and import (D-032).
+"""Tests for optcg/backup.py — snapshots, export and import (D-032).
 
 Run:
     python -m pytest tests/test_backup.py -v
@@ -15,10 +15,10 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from src import backup, db_setup
-from src import collection as coll
-from src import storage as store
-from src.backup import (
+from optcg import backup, db_setup
+from optcg import collection as coll
+from optcg import storage as store
+from optcg.backup import (
     AUTO_PREFIX,
     KEEP_AUTO_SNAPSHOTS,
     BackupError,
@@ -28,9 +28,9 @@ from src.backup import (
     parse_export,
     snapshot,
 )
-from src.cli import main
-from src.db_setup import connect, create_schema
-from src.decks import delete_deck, import_decklist
+from optcg.cli import main
+from optcg.db_setup import connect, create_schema
+from optcg.decks import delete_deck, import_decklist
 
 LEADER = "OP06-042"
 CARDS = [f"OP06-{n:03d}" for n in range(60, 66)]

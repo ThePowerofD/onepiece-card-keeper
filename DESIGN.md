@@ -5,7 +5,7 @@ For status and how to run it, see [README.md](README.md).
 
 Describes what's **built** — Phase 0 and Phase 1 are both complete.
 
-> **The schema itself lives in `src/db_setup.py`** — that's the source of truth
+> **The schema itself lives in `optcg/db_setup.py`** — that's the source of truth
 > and it's executable. This file explains the model, not the DDL.
 
 ---
@@ -42,7 +42,7 @@ given up with it.
 **The logic modules never present.** No `print()`, no HTTP, no formatting: they
 take a connection and return dataclasses. The CLI and the web layer are both thin
 callers. Anything that would put a string in front of a user belongs in `cli.py`
-or `src/web/`, never in `collection.py` and its neighbours — that property is
+or `optcg/web/`, never in `collection.py` and its neighbours — that property is
 what made D-023 cheap and it's worth keeping.
 
 ---
@@ -293,7 +293,7 @@ look exactly like hundreds of removed cards.
 
 ## 6. Sanitization rules
 
-Pure functions in `src/sanitize.py` — no DB access, no side effects, one per rule.
+Pure functions in `optcg/sanitize.py` — no DB access, no side effects, one per rule.
 
 | # | Function | Does |
 |---|---|---|
@@ -325,12 +325,12 @@ A `counter` above 2000 is **reported, never rewritten**: every such value in the
 feed equals the card's power, so it is power leaking into the field. Real
 counters are 1000 or 2000.
 
-**`src/overrides.py`** is the hand-maintained `{base_card_id: {column: value}}`
+**`optcg/overrides.py`** is the hand-maintained `{base_card_id: {column: value}}`
 dict applied after inheritance, for cards where *every* printing is wrong and
 nothing can derive the fix. Same pattern as `SEED_TYPES` and `SET_BLOCKS`; it
 ships empty.
 
-**Id collisions are resolved before sanitizing** (`src/collisions.py`, pure,
+**Id collisions are resolved before sanitizing** (`optcg/collisions.py`, pure,
 D-029). The API reuses `card_image_id` for physically different printings —
 118 ids in the current feed. `resolve_collisions` keeps the id on the base row
 (plain image name, matching set, non-promo feed), gives every other row a unique
@@ -365,7 +365,7 @@ so the alt-art axis is queryable instead of encoded in a string suffix. `pr` is
 tested before `p`, or every promo would read as a parallel.
 
 **`rotation_block` is never populated by sync.** Block isn't in the API at all;
-it comes from a hand-maintained mapping in `src/rotation.py` that ships empty.
+it comes from a hand-maintained mapping in `optcg/rotation.py` that ships empty.
 See D-027.
 
 **Sub-type parsing gotcha:** longest-match matters. `"Neo Navy"` must be matched

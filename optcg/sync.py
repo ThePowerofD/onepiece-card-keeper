@@ -1,8 +1,8 @@
 """Orchestrate a full sync: fetch from OptcgAPI → sanitize → insert into SQLite.
 
 Run:
-    python -m src.sync
-    python -m src.sync --use-cache
+    python -m optcg.sync
+    python -m optcg.sync --use-cache
 """
 
 from __future__ import annotations
@@ -14,12 +14,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple
 
-from src.api_client import fetch_all_promos, fetch_all_set_cards, fetch_all_st_cards
-from src.collisions import resolve_collisions
-from src.db_setup import DB_PATH, connect
-from src.overrides import apply_overrides
-from src.rotation import block_for
-from src.sanitize import (
+from optcg.api_client import fetch_all_promos, fetch_all_set_cards, fetch_all_st_cards
+from optcg.collisions import resolve_collisions
+from optcg.db_setup import DB_PATH, connect
+from optcg.overrides import apply_overrides
+from optcg.rotation import block_for
+from optcg.sanitize import (
     MAX_PLAUSIBLE_COUNTER,
     detect_keywords,
     extract_printing_variant,
@@ -449,7 +449,7 @@ def print_stale_report(report: StaleReport) -> None:
                 new = s.candidates[0]
                 print(f"      new this sync: {new} - if it's the same card, move them with:")
                 for h in s.holdings:
-                    print(f"        python -m src.cli collection set-art {s.base_card_id} "
+                    print(f"        optcg collection set-art {s.base_card_id} "
                           f"{h.quantity} {new} --from-art {s.card_image_id} "
                           f"--in \"{h.container}\" --kind {h.kind}")
             elif s.candidates:
@@ -473,31 +473,36 @@ def main() -> None:
     conn = connect(args.db)
     try:
         stats, stale = run_sync(conn, use_cache=args.use_cache)
-        print()
-        print("=== Sync summary ===")
-        print(f"  Total rows fetched: {stats['total']}")
-        print(f"  Inserted/updated:   {stats['inserted']}")
-        print(f"  Skipped (no id):    {stats['skipped']}")
-        print(f"  Unknown sub_types:  {stats['unknown_types']}")
-        print(f"  Field-shift repairs:{stats['repaired']}")
-        print(f"  Inherited fields:   {stats['fields_rewritten']} "
-              f"across {stats['cards_reconciled']} cards (D-031)")
-        if stats["overridden"]:
-            print(f"  Manual overrides:   {stats['overridden']} rows")
-        if stats["errata_outranks_base"]:
-            print(f"  WARNING: {stats['errata_outranks_base']} card(s) have an errata'd "
-                  f"variant but an un-errata'd base - check before trusting base-wins (D-031)")
-        if stats["implausible_counters"]:
-            print(f"  WARNING: {stats['implausible_counters']} card(s) have a counter "
-                  f"above {MAX_PLAUSIBLE_COUNTER} - likely power leaked into the field")
-        print(f"  Id collisions:      {stats['collisions']} "
-              f"({stats['re_identified']} printings re-identified, "
-              f"{stats['exact_duplicates']} exact duplicates dropped - D-029)")
-        count = conn.execute("SELECT COUNT(*) FROM cards").fetchone()[0]
-        print(f"  cards table count:  {count}")
-        print_stale_report(stale)
+        print_summary(conn, stats, stale)
     finally:
         conn.close()
+
+
+def print_summary(conn: sqlite3.Connection, stats: dict[str, int], stale: StaleReport) -> None:
+    """The end-of-sync report - shared by `python -m optcg.sync` and `optcg sync`."""
+    print()
+    print("=== Sync summary ===")
+    print(f"  Total rows fetched: {stats['total']}")
+    print(f"  Inserted/updated:   {stats['inserted']}")
+    print(f"  Skipped (no id):    {stats['skipped']}")
+    print(f"  Unknown sub_types:  {stats['unknown_types']}")
+    print(f"  Field-shift repairs:{stats['repaired']}")
+    print(f"  Inherited fields:   {stats['fields_rewritten']} "
+          f"across {stats['cards_reconciled']} cards (D-031)")
+    if stats["overridden"]:
+        print(f"  Manual overrides:   {stats['overridden']} rows")
+    if stats["errata_outranks_base"]:
+        print(f"  WARNING: {stats['errata_outranks_base']} card(s) have an errata'd "
+              f"variant but an un-errata'd base - check before trusting base-wins (D-031)")
+    if stats["implausible_counters"]:
+        print(f"  WARNING: {stats['implausible_counters']} card(s) have a counter "
+              f"above {MAX_PLAUSIBLE_COUNTER} - likely power leaked into the field")
+    print(f"  Id collisions:      {stats['collisions']} "
+          f"({stats['re_identified']} printings re-identified, "
+          f"{stats['exact_duplicates']} exact duplicates dropped - D-029)")
+    count = conn.execute("SELECT COUNT(*) FROM cards").fetchone()[0]
+    print(f"  cards table count:  {count}")
+    print_stale_report(stale)
 
 
 if __name__ == "__main__":

@@ -32,14 +32,14 @@ never met a real card.
 **No code.** This is the milestone, not a prerequisite to it.
 
 ```bash
-python -m src.cli deck import <file.txt> --name "<deck>" --physical
-python -m src.cli location add "Binder A" --notes "red decks"
+optcg deck import <file.txt> --name "<deck>" --physical
+optcg location add "Binder A" --notes "red decks"
 ```
 
 Import every deck that's currently sleeved. Each one credits the collection as a
 side effect (D-011), so this is also the cheapest bulk entry that exists.
 
-Once there's real data, `python -m src.cli backup export` after a session of
+Once there's real data, `optcg backup export` after a session of
 entry is the copy that survives anything (D-032). Destructive commands already
 snapshot by themselves. Add `--dry-run` to an import you're unsure of: a wrong
 physical import can't be cleanly undone with `deck delete` (D-034).
@@ -77,7 +77,7 @@ The milestone where it stops being a script.
 
 Keep it returning plain rows; the HTTP layer does the JSON shaping.
 
-### b. `src/web/api.py`
+### b. `optcg/web/api.py`
 
 FastAPI. Imports the existing modules and calls them — **no SQL in this file.**
 One dependency yields a connection from `db_setup.connect()`.

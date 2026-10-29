@@ -4,7 +4,7 @@ Idempotent — re-running never duplicates. Expand SEED_TYPES as unknown_type_lo
 reveals new types during sync.
 
 Run:
-    python -m src.known_types
+    python -m optcg.known_types
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import argparse
 import sqlite3
 from pathlib import Path
 
-from src.db_setup import DB_PATH, connect
+from optcg.db_setup import DB_PATH, connect
 
 SEED_TYPES: list[str] = [
     # Core factions (API uses "The" prefix variants)

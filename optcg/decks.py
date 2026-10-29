@@ -20,11 +20,11 @@ import sqlite3
 from pathlib import Path
 from typing import NamedTuple
 
-from src.backup import auto_snapshot
-from src.collection import committed_elsewhere, deposit, empty_container, total_owned
-from src.deck_parser import parse_decklist
-from src.resolve import unknown_ids
-from src.storage import deck_container
+from optcg.backup import auto_snapshot
+from optcg.collection import committed_elsewhere, deposit, empty_container, total_owned
+from optcg.deck_parser import parse_decklist
+from optcg.resolve import unknown_ids
+from optcg.storage import deck_container
 
 MAX_COPIES = 4          # warned, never enforced (D-004)
 STANDARD_DECK_SIZE = 50  # excluding the leader

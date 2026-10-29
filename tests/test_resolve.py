@@ -1,4 +1,4 @@
-"""Unit tests for src/resolve.py.
+"""Unit tests for optcg/resolve.py.
 
 D-030 removed `default_printing` and `resolve_base_id` along with D-016, so
 only the unknown-id check remains here; printings are listed by
@@ -13,8 +13,8 @@ from __future__ import annotations
 import sqlite3
 import unittest
 
-from src.db_setup import create_schema
-from src.resolve import unknown_ids
+from optcg.db_setup import create_schema
+from optcg.resolve import unknown_ids
 
 
 def make_db() -> sqlite3.Connection:
