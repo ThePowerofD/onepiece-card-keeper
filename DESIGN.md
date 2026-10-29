@@ -15,7 +15,7 @@ Describes what's **built** — Phase 0 and Phase 1 are both complete.
 - Track inventory at **printing level** — base art, alt arts and reprints are distinct.
 - Import decks from Limitless TCG paste format, or the deckbuilder-export style
   (`Character (40)` headers, `(OP06-042)` ids).
-- Distinguish cards locked in sleeved decks from cards free to use.
+- Distinguish cards locked in built decks from cards free to use.
 - Show deck completion (owned vs missing) for any decklist, including decks you can't yet build.
 - Run locally on one machine, for one owner. Hosting it for the owner's own
   devices is possible later, not planned (D-033); multi-user is not.
@@ -57,7 +57,7 @@ The most important distinction in the project:
 | **Gameplay card** | `base_card_id` | `OP05-097` | Decks — the card as the rules see it |
 
 Every printing of a card shares one `base_card_id`. A decklist never says which
-printing is sleeved, because in the game they're identical.
+printing is in the deck, because in the game they're identical.
 
 ### Printing variants
 
@@ -178,7 +178,7 @@ erDiagram
         INTEGER id PK
         TEXT name
         TEXT leader_id "base_card_id, no FK"
-        BOOLEAN is_physical "TRUE = sleeved, locks cards"
+        BOOLEAN is_physical "TRUE = a real deck: its list is its cards"
         TEXT notes
     }
     deck_cards {

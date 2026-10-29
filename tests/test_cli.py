@@ -9,6 +9,7 @@ Run:
 
 from __future__ import annotations
 
+import argparse
 import io
 import sqlite3
 import tempfile
@@ -17,7 +18,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from optcg.cli import main
+from optcg.cli import build_parser, main, quoted_suggestion
 from optcg.db_setup import create_schema
 
 LEADER = "OP05-100"
@@ -1240,4 +1241,58 @@ class DeckEditCommandTests(CliTestCase):
         _, out, _ = self.run_cli("deck", "import", str(shorter), "--name", "Red",
                                  "--on-conflict", "replace")
         self.assertIn("taken out:     4 copies", out)
+
+
+class QuoteHintTests(CliTestCase):
+    """Names with spaces need quotes; forgetting them says how to type it."""
+
+    def run_err(self, *argv) -> str:
+        err = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(err), self.assertRaises(SystemExit):
+            main(["--db", str(self.db), *argv])
+        return err.getvalue()
+
+    def test_suggestion_puts_the_name_in_quotes(self):
+        self.assertEqual(quoted_suggestion(["collection", "add", "vinsmoke", "ichiji", "2"], "ichiji"),
+                         'collection add "vinsmoke ichiji" 2')
+        self.assertEqual(
+            quoted_suggestion(["deck", "add", "Reiju", "monkey", "d", "luffy", "4", "--from", "X"], "d"),
+            'deck add Reiju "monkey d luffy" 4 --from X')
+        self.assertEqual(quoted_suggestion(["--db", "x.db", "collection", "add", "a", "b", "1"], "b"),
+                         'collection add "a b" 1')
+        self.assertIsNone(quoted_suggestion(["collection", "add", "a", "b"], "b"))  # no number
+
+    def test_forgetting_quotes_shows_the_quoted_command(self):
+        err = self.run_err("collection", "add", "vinsmoke", "ichiji", "2")
+        self.assertIn("a card name with spaces needs quotes", err)
+        self.assertIn('optcg collection add "vinsmoke ichiji" 2', err)
+
+    def test_an_extra_word_mentions_quotes(self):
+        err = self.run_err("collection", "add", "mr.", "9", "2")
+        self.assertIn("unrecognized arguments: 2", err)
+        self.assertIn("put it in quotes", err)
+
+    def test_the_card_help_says_names_need_quotes(self):
+        out = io.StringIO()
+        with redirect_stdout(out), self.assertRaises(SystemExit):
+            main(["collection", "add", "--help"])
+        self.assertIn("needs quotes", out.getvalue())
+        self.assertIn("card quantity", out.getvalue())  # not base_card_id
+
+
+class WordingTests(unittest.TestCase):
+    def test_no_help_text_says_sleeved(self):
+        """D-041: nothing tracks sleeves; the screen says "in the deck"."""
+        parser = build_parser()
+        pending = [parser]
+        seen = 0
+        while pending:
+            p = pending.pop()
+            text = p.format_help()
+            self.assertNotIn("sleev", text.lower(), p.prog)
+            seen += 1
+            for action in p._actions:
+                if isinstance(action, argparse._SubParsersAction):
+                    pending.extend(action.choices.values())
+        self.assertGreater(seen, 30)  # every group and command was looked at
 

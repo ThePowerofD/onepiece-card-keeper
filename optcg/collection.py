@@ -68,14 +68,14 @@ class CardStatus(NamedTuple):
     base_card_id: str
     name: str
     total_owned: int
-    committed: int                # copies sleeved into physical decks
+    committed: int                # copies in physical decks
     arts: list[ArtTotal]          # what you own, by art; unsorted first
     holdings: list[Holding]       # what you own, by container
     printings: list[Printing]     # every printing that exists, owned or not
 
     @property
     def loose(self) -> int:
-        """Copies not sleeved into a physical deck."""
+        """Copies not in a physical deck."""
         return self.total_owned - self.committed
 
     @property
@@ -503,7 +503,7 @@ def total_owned(conn: sqlite3.Connection, base_card_id: str) -> int:
 
 
 def committed(conn: sqlite3.Connection, base_card_id: str) -> int:
-    """Copies sleeved into physical decks — owned, but not free to use elsewhere."""
+    """Copies in physical decks — owned, but not free to use elsewhere."""
     return conn.execute(
         "SELECT COALESCE(SUM(cp.quantity), 0) FROM copies cp "
         "JOIN decks d ON d.id = cp.deck_id "

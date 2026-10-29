@@ -329,8 +329,8 @@ def cmd_deck_delete(conn: sqlite3.Connection, args) -> int:
         kind = "physical" if detail.is_physical else "wishlist"
         print(f"Deleting {kind} deck {detail.name!r} deletes its list "
               f"({detail.total_cards} cards).")
-        if detail.sleeved_total:
-            print(f"The {detail.sleeved_total} copies in it go to just-loose - "
+        if detail.in_deck_total:
+            print(f"The {detail.in_deck_total} copies in it go to just-loose - "
                   f"you still own them.")
         if not ask_to_continue("delete it?"):
             return 1
@@ -876,6 +876,34 @@ _INVALID_CHOICE = re.compile(r"invalid choice: '([^']*)' \(choose from (.*)\)")
 #: finds your way across it.
 HIDDEN_COMMANDS = ("poneglyph", "logpose")
 
+_BAD_QUANTITY = re.compile(r"argument quantity: invalid int value: '([^']*)'")
+
+#: The words of the command being parsed, for suggestions that repeat it back.
+_typed: list[str] = []
+
+
+def quoted_suggestion(words: list[str], bad: str) -> str | None:
+    """The command with an unquoted multi-word name put in quotes, or None.
+
+    `collection add vinsmoke ichiji 2` parses 'vinsmoke' as the card and trips
+    on 'ichiji' as the quantity. The name is the word before that up to the
+    next number: `collection add "vinsmoke ichiji" 2`.
+    """
+    words = list(words)
+    if "--db" in words:  # not something anyone typed in the shell
+        i = words.index("--db")
+        del words[i:i + 2]
+    if bad not in words:
+        return None
+    start = words.index(bad) - 1
+    end = start + 1
+    while end < len(words) and not words[end].isdigit():
+        end += 1
+    if start < 0 or end == len(words):
+        return None
+    name = " ".join(words[start:end])
+    return " ".join(words[:start] + [f'"{name}"'] + words[end:])
+
 
 class Parser(argparse.ArgumentParser):
     """argparse, except a mistake shows that command's examples and where more help is.
@@ -893,6 +921,16 @@ class Parser(argparse.ArgumentParser):
             message = message.replace(typo.group(2), listed)
         self.print_usage(sys.stderr)
         print(f"error: {message}", file=sys.stderr)
+        bad_quantity = _BAD_QUANTITY.search(message)
+        if bad_quantity:
+            # Almost always a card name with spaces and no quotes (D-037).
+            fixed = quoted_suggestion(_typed, bad_quantity.group(1))
+            print("  a card name with spaces needs quotes"
+                  + (f":\n    {'' if _in_shell else 'optcg '}{fixed}" if fixed else ""),
+                  file=sys.stderr)
+        elif message.startswith("unrecognized arguments"):
+            print('  if a card or place name has spaces, put it in quotes: "mr. 9"',
+                  file=sys.stderr)
         if typo:
             close = difflib.get_close_matches(typo.group(1), choices, n=1)
             if close:
@@ -922,7 +960,7 @@ how it fits together
 
 getting started
   deck import decklists\\Reiju_deck.txt --name "Reiju"
-      a sleeved deck - its cards join your collection, sitting in the deck
+      a deck you own - its cards join your collection, sitting in the deck
   collection add OP06-060 2
       loose cards you own
   storage add "Binder A" --type binder
@@ -942,7 +980,8 @@ The examples are written the way you type them in the shell, which
   optcg deck show "Reiju"
 """
 
-ID_HELP = "card id (OP06-042) or part of its name (ichiji, \"germa 66\")"
+ID_HELP = ("card id (OP06-042) or part of its name (ichiji). A name with spaces "
+           "needs quotes: \"vinsmoke ichiji\"")
 NAME_HELP = "put it in quotes if it has spaces"
 
 
@@ -991,16 +1030,17 @@ def build_parser() -> argparse.ArgumentParser:
     # ---- deck -----------------------------------------------------------
     deck = _group(
         sub, "deck", "import and manage decks",
-        "Decks are lists of cards. A physical deck is one you have sleeved: importing\n"
-        "it adds its cards to your collection, located in the deck. A wishlist deck\n"
-        "is one you want to build: it only tells you what you're missing.",
+        "A physical deck is one you own and have built: it is exactly the cards in\n"
+        "it, and importing one adds those cards to your collection, located in the\n"
+        "deck. A wishlist deck is one you want to build: a list that tells you what\n"
+        "you're missing, holding no cards.",
         'deck import decklists\\Reiju_deck.txt --name "Reiju"',
         'deck show "Reiju"',
         "deck list",
     )
 
     def deck_options(p) -> None:
-        p.add_argument("--physical", action="store_true", help="a deck you have sleeved (default)")
+        p.add_argument("--physical", action="store_true", help="a deck you own and have built (default)")
         p.add_argument("--wishlist", action="store_true",
                        help="a deck you want to build - your collection is untouched")
         p.add_argument("--on-conflict", choices=["replace", "new"],
@@ -1052,7 +1092,7 @@ def build_parser() -> argparse.ArgumentParser:
         'deck delete "Reiju"',
         'deck delete "Reiju" --yes',
         description="Delete a deck. You still own its cards: the copies that were\n"
-                    "sleeved in it move to just-loose. You are asked first, and the\n"
+                    "in it move to just-loose. You are asked first, and the\n"
                     "database is snapshotted to data/backups/ before anything changes.",
     )
     p.add_argument("deck", help="deck name or id")
@@ -1144,7 +1184,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Record copies you now own. They go to just-loose unless you name\n"
                     "a container with --to.",
     )
-    p.add_argument("base_card_id", help=ID_HELP)
+    p.add_argument("base_card_id", metavar="card", help=ID_HELP)
     p.add_argument("quantity", type=int)
     p.add_argument("--art", default=None, help=art_help + "; leave out if you haven't sorted them")
     p.add_argument("--to", default=None,
@@ -1158,7 +1198,7 @@ def build_parser() -> argparse.ArgumentParser:
         "collection remove OP06-060 1",
         'collection remove OP06-042 1 --art p1 --from "Binder A"',
     )
-    p.add_argument("base_card_id", help=ID_HELP)
+    p.add_argument("base_card_id", metavar="card", help=ID_HELP)
     p.add_argument("quantity", type=int)
     p.add_argument("--art", default=None, help=art_help)
     p.add_argument("--from", default=None, help="container (default: just-loose)")
@@ -1174,7 +1214,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Move copies between containers. Moving more than the source holds is\n"
                     "an error, and the message says what is actually there.",
     )
-    p.add_argument("base_card_id", help=ID_HELP)
+    p.add_argument("base_card_id", metavar="card", help=ID_HELP)
     p.add_argument("quantity", type=int)
     p.add_argument("--from", default=None, help="source (default: just-loose)")
     p.add_argument("--to", required=True,
@@ -1195,7 +1235,7 @@ def build_parser() -> argparse.ArgumentParser:
                     "name the container with --in. `collection show <card id>` lists the\n"
                     "arts that exist.",
     )
-    p.add_argument("base_card_id", help=ID_HELP)
+    p.add_argument("base_card_id", metavar="card", help=ID_HELP)
     p.add_argument("quantity", type=int)
     p.add_argument("art", help=art_help)
     p.add_argument("--in", dest="location", default=None,
@@ -1210,7 +1250,7 @@ def build_parser() -> argparse.ArgumentParser:
         col, "show", "one card: how many you own, which arts, where they are",
         "collection show OP06-042",
     )
-    p.add_argument("base_card_id", help=ID_HELP)
+    p.add_argument("base_card_id", metavar="card", help=ID_HELP)
     p.set_defaults(func=cmd_collection_show)
 
     def card_filters(p, limit: int, limit_help: str) -> None:
@@ -1357,7 +1397,7 @@ def build_parser() -> argparse.ArgumentParser:
                     "that person - a storage place of type 'loan', offered to be created\n"
                     "if they aren't one yet. When the cards come back, move them out again.",
     )
-    p.add_argument("base_card_id", help=ID_HELP)
+    p.add_argument("base_card_id", metavar="card", help=ID_HELP)
     p.add_argument("quantity", type=int)
     p.add_argument("to_whom", help="who has them: a storage place of type 'loan'")
     p.add_argument("--art", default=None, help="which printing is going out")
@@ -1466,6 +1506,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     _use_utf8_output()
+    global _typed
+    _typed = list(sys.argv[1:] if argv is None else argv)
     args = build_parser().parse_args(argv)
 
     if getattr(args, "physical", False) and getattr(args, "wishlist", False):

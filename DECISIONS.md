@@ -55,6 +55,7 @@ knowing why it's that way? If not, it doesn't need an entry.
 | [D-039](#d-039--your-collection-is-what-you-own-browse-is-everything) | Your collection is what you own; `browse` is everything | 2026-10-29 |
 | [D-040](#d-040--storage-places-have-a-type-from-a-list-you-add-to) | Storage places have a type, from a list you add to | 2026-10-29 |
 | [D-041](#d-041--a-physical-deck-is-exactly-whats-in-it) | **A physical deck is exactly what's in it** | 2026-10-29 |
+| [D-042](#d-042--names-with-spaces-take-quotes-nothing-says-sleeved) | Names with spaces take quotes; nothing says "sleeved" | 2026-10-29 |
 
 ---
 
@@ -1428,3 +1429,34 @@ wishlist - its cards return to just-loose and the list stays, as the plan.
 A database from before this can still hold a deck whose list and contents
 differ. `deck show` points those out rather than hiding them; nothing rewrites
 them silently.
+
+---
+
+## D-042 — Names with spaces take quotes; nothing says "sleeved"
+
+**2026-10-29** · *Wording that goes with D-037 and D-041*
+
+**Quotes are the one rule for names with spaces** - cards, places and decks
+alike: `collection add "vinsmoke ichiji" 2 --to "Binder A"`. Without them the
+command can't be read: 549 card names contain a number, so `collection add mr.
+9 2` could mean 2 copies of Mr. 9 or 9 copies of "Mr." with a stray `2`. A
+quantity marker instead of quotes was considered: **`#2` is out** - PowerShell
+treats `#` as the start of a comment outside the shell and silently drops it -
+and **`2x`** is conflict-free in the card data (no name contains `#`, `+`, `x2`
+or `2x`, or starts with a digit) but would be a second rule on top of quotes,
+which place names need anyway. The owner chose quotes only, for now; `2x` can be
+added later without breaking anything.
+
+What makes the rule bearable is the error: a quantity that isn't a number is
+almost always an unquoted name, so the CLI prints the command back with the
+quotes in place (`optcg collection add "vinsmoke ichiji" 2`), and an extra
+stray word gets a reminder too. Every card argument's help says it as well.
+
+**Nothing on screen says "sleeved" any more.** There is no sleeved value
+anywhere - the database never had one. A copy is in a deck because its place is
+the deck, and D-041 makes the deck exactly those copies, so the screen says
+*in the deck* and a physical deck is *one you own and have built*. The
+internal names followed (`in_deck_total`), and `unsleeved`, `unsleeved_total`
+and `is_built` were removed: under D-041 there is nothing for them to measure.
+A test sweeps every command's help so the word doesn't creep back.
+

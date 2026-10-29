@@ -1,7 +1,7 @@
 # OPTCG Manager
 
 Personal offline app for managing a One Piece TCG collection and deck building.
-Tracks what you physically own, where it is, what's sleeved into which deck, and
+Tracks what you physically own, where it is, which cards are in which deck, and
 what you're missing to build a deck you want.
 
 Python CLI today. Becomes a local web app — FastAPI + React in a browser tab —
@@ -69,7 +69,9 @@ you named are in your deck, `optcg setup` when the database isn't set up yet.
 
 - **Card** — the id printed on the card, like `OP06-042`, or part of its name:
   `collection add cosette 2`. Many cards share a name, so a name that matches
-  several gives you a numbered list to pick from (or `c` to cancel).
+  several gives you a numbered list to pick from (or `c` to cancel). **A name
+  with spaces needs quotes** — `collection add "vinsmoke ichiji" 2` — and so does
+  a place: `--to "Binder A"`. Forget them and the error shows the command quoted.
 - **Art** — which printing you have (`base`, `p1`, ...). Optional: copies start
   unsorted and you can say later.
 - **Place** — where a card physically is: a deck, or a storage place you create
@@ -79,7 +81,7 @@ you named are in your deck, `optcg setup` when the database isn't set up yet.
 **A handful of commands cover almost everything:**
 
 ```
-deck import mydeck.txt --name "Reiju"      a sleeved deck - its cards join your collection
+deck import mydeck.txt --name "Reiju"      a deck you own - its cards join your collection
 deck show "Reiju"                          what you own vs what's missing
 collection add OP06-060 2                  loose cards you own
 collection show OP06-060                   how many, which arts, where they are
@@ -115,7 +117,7 @@ track what you own and which art, record where every copy is, and see what's
 missing for a deck you want to build. `optcg shell` makes entering
 a lot at once quick.
 
-**Real data has started.** The first sleeved deck, Reiju, is in: 51 copies of 18
+**Real data has started.** The first real deck, Reiju, is in: 51 copies of 18
 cards, arts not yet sorted. From here the database holds data that exists
 nowhere else, so it's protected now (D-032, D-034): destructive commands
 snapshot the database first and ask when something would be lost, imports take
@@ -134,7 +136,7 @@ as UI instead of terminal tables. See **D-024** for the reasoning.
 | Sets covered | OP01–OP17, EB01–EB04, ST01–ST36, PRB01–02, promos |
 | Bad rows in logs | none |
 | Owned so far | 51 copies, 1 deck |
-| Tests | 610 passing |
+| Tests | 615 passing |
 
 **Known limitation:** OptcgAPI lags the real game. It caught up to **OP17** by
 2026-10-29 (synced that day: 158 new OP17 printings, ST31–ST36, and three new
@@ -142,7 +144,7 @@ card types). When a newer set is out, its ids are missing until the API catches
 up — re-run the sync then. A new set usually needs new types in `SEED_TYPES`
 first; the sync summary says so.
 
-**Next up:** the rest of [PHASE_2.md](PHASE_2.md) M0 — import every sleeved
+**Next up:** the rest of [PHASE_2.md](PHASE_2.md) M0 — import every built
 deck. The safety work before bulk entry is done: backups (D-032), confirmations
 and dry-run (D-034), and a sync that reports printings that stopped refreshing
 instead of losing track of them (D-035).
@@ -176,7 +178,7 @@ python -m pytest tests/ --cov=optcg --cov-report=term-missing   # coverage (99%)
   Stale printings:    0
 ```
 
-...and 610 passing tests. Anything else means something changed upstream —
+...and 615 passing tests. Anything else means something changed upstream —
 `Unknown sub_types` above 0 usually means a new set introduced a card type;
 add it to `SEED_TYPES` in `optcg/known_types.py` and re-sync. `Stale printings`
 above 0 means the API stopped sending some rows; they are kept, and if you own
@@ -209,7 +211,7 @@ Inside the shell, `help` shows a getting-started guide, and `help deck` or
 `help deck import` shows a group or a single command with examples.
 
 ```bash
-# Decks — importing a sleeved deck also credits your collection
+# Decks — importing a deck you own also credits your collection
 optcg deck import mydeck.txt --name "Red Luffy" --physical
 optcg deck import wanted.txt --name "Purple Doffy" --wishlist
 optcg deck paste --name "Red Luffy"  # type/paste the list, finish with: end
@@ -289,7 +291,7 @@ Every command takes `--db PATH` to work against a different database file.
 take from unless you say otherwise. `just-loose` can't be renamed or deleted.
 
 **The art is optional.** A decklist names `OP05-097` without saying which art is
-sleeved, so imported copies stay *unsorted* rather than guessing the plain
+in the deck, so imported copies stay *unsorted* rather than guessing the plain
 printing. Record the art later, where the copies actually are:
 `collection set-art OP05-097 1 p1 --in "Mewtwo Binder"`. It splits the row; your
 total never moves.
@@ -365,7 +367,7 @@ optcg/
   decks.py        deck import and management
   backup.py       snapshots, and JSON export/import of your own data
   cli.py          argparse entry point over all of the above
-tests/            610 tests
+tests/            615 tests
 data/             optcg.db, cache/ and backups/ (all gitignored)
 ```
 

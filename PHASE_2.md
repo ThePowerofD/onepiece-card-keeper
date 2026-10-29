@@ -36,7 +36,7 @@ optcg deck import <file.txt> --name "<deck>" --physical
 optcg storage add "Binder A" --type binder --notes "red decks"
 ```
 
-Import every deck that's currently sleeved. Each one credits the collection as a
+Import every deck you have built. Each one credits the collection as a
 side effect (D-011), so this is also the cheapest bulk entry that exists.
 
 Once there's real data, `optcg backup export` after a session of
@@ -58,7 +58,7 @@ Reversing one now is an afternoon; reversing it after 5,000 cards are entered is
 a migration. Build the UI against the real collection, not against fixtures.
 
 **Done when:** `collection list` shows your actual cards, and every
-sleeved deck appears in `deck list`.
+built deck appears in `deck list`.
 
 ---
 

@@ -1,8 +1,8 @@
-"""Decks — a recipe, and for physical decks the copies sleeved into it.
+"""Decks — a recipe, and for physical decks the copies in it.
 
 A deck does two jobs. The **recipe** (`deck_cards`) says what the deck is made
 of, at gameplay level, and exists even for a wishlist deck you own nothing of.
-The **container** holds the copies actually sleeved into it — ordinary `copies`
+The **container** holds the copies actually in the deck — ordinary `copies`
 rows, the same as a binder's (D-030).
 
 Importing a physical deck writes the recipe *and* places its copies in one
@@ -81,7 +81,7 @@ def _deck_quantities(conn: sqlite3.Connection, deck_id: int) -> dict[str, int]:
 
 
 def _copies_in_deck(conn: sqlite3.Connection, deck_id: int) -> dict[str, int]:
-    """How many copies of each card are actually sleeved into this deck."""
+    """How many copies of each card are actually in this deck."""
     return {
         base_card_id: qty
         for base_card_id, qty in conn.execute(
@@ -107,7 +107,7 @@ def import_decklist(
         "new"       create a second deck with the same name
 
     The leader is stored in `decks.leader_id` *and* as a `deck_cards` row, so a
-    sleeved leader is locked out of availability like any other card.
+    leader in the deck is locked out of availability like any other card.
 
     Everything lands in one transaction, or nothing does.
     """
@@ -158,7 +158,7 @@ def import_decklist(
     returned = 0
     try:
         if replaced:
-            # The deck row survives so its sleeved copies stay attached to it
+            # The deck row survives so the copies in it stay attached to it
             # (D-030). Only the recipe is rewritten.
             deck_id = existing_id
             conn.execute(
@@ -265,17 +265,12 @@ class DeckSummary(NamedTuple):
 class DeckCardStatus(NamedTuple):
     base_card_id: str
     name: str
-    needed: int            # what the recipe asks for; 0 = sleeved but not in the recipe
+    needed: int            # what the list asks for; 0 = in the deck but not listed
     owned: int             # copies of this card anywhere
-    in_deck: int           # copies actually sleeved into this deck
+    in_deck: int           # copies actually in this deck
     available_to_deck: int
     missing: int           # can't be built: needed beyond what's available
     is_leader: bool
-
-    @property
-    def unsleeved(self) -> int:
-        """Recipe slots this deck hasn't been filled with yet."""
-        return max(0, self.needed - self.in_deck)
 
 
 class DeckDetail(NamedTuple):
@@ -286,21 +281,12 @@ class DeckDetail(NamedTuple):
     cards: list[DeckCardStatus]
     total_cards: int
     missing_total: int
-    sleeved_total: int
+    in_deck_total: int
 
     @property
     def is_complete(self) -> bool:
         """Owning enough to build it — the question a wishlist deck asks."""
         return self.missing_total == 0
-
-    @property
-    def unsleeved_total(self) -> int:
-        """Recipe slots not yet filled with real copies (physical decks)."""
-        return sum(c.unsleeved for c in self.cards)
-
-    @property
-    def is_built(self) -> bool:
-        return self.unsleeved_total == 0
 
 
 def resolve_deck(conn: sqlite3.Connection, ref: str | int) -> int:
@@ -357,17 +343,17 @@ def show_deck(conn: sqlite3.Connection, ref: str | int) -> DeckDetail:
         "FROM deck_cards dc WHERE dc.deck_id = ? ORDER BY dc.base_card_id",
         (deck_id,),
     ).fetchall()
-    sleeved = _copies_in_deck(conn, deck_id)
+    in_deck = _copies_in_deck(conn, deck_id)
 
-    # Copies sleeved into the deck that the recipe no longer asks for. Replacing
-    # a decklist never pulls cards out of the sleeves (D-030), so they show up
-    # here with needed = 0 until they're moved.
+    # Copies in the deck that its list doesn't ask for. Since D-041 every
+    # change keeps the two equal, so only a database from before can have
+    # these; they show with needed = 0 rather than being hidden.
     extras = [
         (base_card_id, 0, conn.execute(
             "SELECT COALESCE(MIN(name), ?) FROM cards WHERE base_card_id = ?",
             (base_card_id, base_card_id),
         ).fetchone()[0])
-        for base_card_id in sleeved
+        for base_card_id in in_deck
         if base_card_id not in {r[0] for r in recipe}
     ]
 
@@ -381,7 +367,7 @@ def show_deck(conn: sqlite3.Connection, ref: str | int) -> DeckDetail:
                 name=card_name,
                 needed=needed,
                 owned=owned,
-                in_deck=sleeved.get(base_card_id, 0),
+                in_deck=in_deck.get(base_card_id, 0),
                 available_to_deck=available_to_deck,
                 missing=max(0, needed - available_to_deck),
                 is_leader=(base_card_id == leader_id),
@@ -399,7 +385,7 @@ def show_deck(conn: sqlite3.Connection, ref: str | int) -> DeckDetail:
         cards=cards,
         total_cards=sum(c.needed for c in cards),
         missing_total=sum(c.missing for c in cards),
-        sleeved_total=sum(c.in_deck for c in cards),
+        in_deck_total=sum(c.in_deck for c in cards),
     )
 
 
@@ -409,7 +395,7 @@ class DeckDeletion(NamedTuple):
 
 
 def delete_deck(conn: sqlite3.Connection, ref: str | int) -> DeckDeletion:
-    """Delete a deck. Its sleeved copies go back to just-loose; `deck_cards` cascades.
+    """Delete a deck. The copies in it go back to just-loose; `deck_cards` cascades.
 
     Snapshots the database first (D-032): the recipe is gone for good.
 
