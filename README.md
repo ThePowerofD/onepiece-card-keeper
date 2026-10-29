@@ -54,20 +54,22 @@ command's usage, so you can fix it and re-run.
 
 **Three ideas:**
 
-- **Card id** — the code printed on the card, like `OP06-042`. Commands take
-  this, not the name.
+- **Card** — the id printed on the card, like `OP06-042`, or part of its name:
+  `collection add cosette 2`. Many cards share a name, so a name that matches
+  several gives you a numbered list to pick from (or `c` to cancel).
 - **Art** — which printing you have (`base`, `p1`, ...). Optional: copies start
   unsorted and you can say later.
 - **Container** — where a card physically is: a deck, or a location you create.
   Cards with nowhere named go to `just-loose`.
 
-**Six commands cover almost everything:**
+**Seven commands cover almost everything:**
 
 ```
 deck import mydeck.txt --name "Reiju"      a sleeved deck - its cards join your collection
 deck show "Reiju"                          what you own vs what's missing
 collection add OP06-060 2                  loose cards you own
 collection show OP06-060                   how many, which arts, where they are
+find ichiji                                every card with that in its name, and what you own
 location add "Binder A" --kind binder      a place to keep cards
 collection move OP06-060 2 --to "Binder A"
 ```
@@ -116,7 +118,7 @@ as UI instead of terminal tables. See **D-024** for the reasoning.
 | Sets covered | OP01–OP17, EB01–EB04, ST01–ST36, PRB01–02, promos |
 | Bad rows in logs | none |
 | Owned so far | 51 copies, 1 deck |
-| Tests | 519 passing |
+| Tests | 547 passing |
 
 **Known limitation:** OptcgAPI lags the real game. It caught up to **OP17** by
 2026-10-29 (synced that day: 158 new OP17 printings, ST31–ST36, and three new
@@ -158,7 +160,7 @@ python -m pytest tests/ --cov=optcg --cov-report=term-missing   # coverage (99%)
   Stale printings:    0
 ```
 
-...and 519 passing tests. Anything else means something changed upstream —
+...and 547 passing tests. Anything else means something changed upstream —
 `Unknown sub_types` above 0 usually means a new set introduced a card type;
 add it to `SEED_TYPES` in `optcg/known_types.py` and re-sync. `Stale printings`
 above 0 means the API stopped sending some rows; they are kept, and if you own
@@ -200,6 +202,10 @@ optcg deck show "Red Luffy"          # owned vs missing per card
 optcg deck set-physical "Purple Doffy"
 optcg deck delete "Red Luffy"        # asks first; copies return to just-loose
 optcg deck import new.txt --name "Enel" --dry-run   # see the result, save nothing
+
+# Finding a card — by id in any case, or by part of its name
+optcg find vinsmoke ichiji                   # every match, what it is, how many you own
+optcg collection show cosette                # a name works anywhere an id does
 
 # Collection — you own gameplay cards; the art is optional detail
 optcg collection add OP05-097 4                  # unsorted, into just-loose
@@ -316,13 +322,13 @@ optcg/
   known_types.py  seeds the card-type vocabulary
   sync.py         orchestrator: fetch → sanitize → upsert
   deck_parser.py  Limitless and deckbuilder-export decklists — pure, never raises
-  resolve.py      gameplay id → printings; picks the printing an import credits
+  resolve.py      what you typed → card ids: exact ids, name search, typo fixes
   collection.py   what you own, with the availability guard
   storage.py      storage locations and placements
   decks.py        deck import and management
   backup.py       snapshots, and JSON export/import of your own data
   cli.py          argparse entry point over all of the above
-tests/            519 tests
+tests/            547 tests
 data/             optcg.db, cache/ and backups/ (all gitignored)
 ```
 

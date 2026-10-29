@@ -50,6 +50,7 @@ knowing why it's that way? If not, it doesn't need an entry.
 | [D-034](#d-034--ask-only-when-something-is-lost-dry-run-only-on-imports) | Ask only when something is lost; dry-run only on imports | 2026-10-29 |
 | [D-035](#d-035--stale-printings-are-reported-never-deleted) | **Stale printings are reported, never deleted** | 2026-10-29 |
 | [D-036](#d-036--the-command-is-optcg-the-package-is-optcg) | The command is `optcg`; the package is `optcg` | 2026-10-29 |
+| [D-037](#d-037--cards-can-be-named-a-shared-name-asks-which) | Cards can be named; a shared name asks which | 2026-10-29 |
 
 ---
 
@@ -1223,3 +1224,42 @@ harmless. **`optcg sync` seeds the card types before fetching**: a code update
 that adds a new set's types then needs no extra step. The three module entry
 points stay for development; `db_setup --reset` in particular is deliberately
 not reachable from `optcg`.
+
+---
+
+## D-037 — Cards can be named; a shared name asks which
+
+**2026-10-29** · *Every command that takes a card id; ids stay what is stored*
+
+Commands only took the printed id. The owner asked to look cards up by name,
+and then for names to work when adding too, with a numbered list when a name
+is ambiguous - "did you mean [1] [2] [3], or c to cancel".
+
+**Names are ambiguous far more often than they look.** Measured on the
+catalog: 366 names are shared by two or more *different* cards. `OP06-060` and
+`OP06-061` are both "Vinsmoke Ichiji"; "reiju" matches 7 cards, "luffy" 91. So a
+name is never resolved by guessing, and the rules are:
+
+- **An exact id, in any case** (`op06-060`), is used directly - no search.
+- **One match** is used, and said out loud (`'cosette' is OP06-072 Cosette`),
+  so a wrong match is visible before it is trusted.
+- **2 to 10 matches** are listed as `[1]`...`[n]` with what tells same-name
+  cards apart - category, colour, cost - and how many you own. Pick a number,
+  or `c` to cancel; anything else asks again.
+- **More than 10** (`MAX_PICK`) are not offered as a list: they are shown, and
+  you type more of the name. Nobody reads 91 Luffys.
+- **No console** (piped input) lists the matches and stops - never picks.
+- **An id that isn't in the catalog** says "unknown card", not "no name
+  matches": `OP17-001` before a sync is a missing card, not a failed search.
+
+Matching ignores capitals, dots and dashes (`monkey d luffy` finds
+`Monkey.D.Luffy`) and needs every word typed, in any order. Any printing's name
+counts, so a foil's name finds its card, but each card is listed once. With no
+match, each word is corrected separately against the words in card names
+(`vinsmok ichji` -> `vinsmoke ichiji`) and suggested only if the correction
+finds something. Comparing whole names was tried first and suggested "Richie"
+for `ichjii`: a short typo looks nothing like a long full name.
+
+The lookup is in `resolve.py` and returns data; the picker is in the CLI and
+runs once, in `run_command`, for every command with a card argument. A web
+caller gets the same matches and draws its own list.

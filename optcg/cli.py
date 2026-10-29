@@ -19,6 +19,7 @@ Every command takes --db to point at a different SQLite file.
 from __future__ import annotations
 
 import argparse
+import re
 import shlex
 import sqlite3
 import sys
@@ -27,6 +28,7 @@ from pathlib import Path
 
 from optcg import backup
 from optcg import collection as coll
+from optcg import resolve
 from optcg import storage as store
 from optcg.backup import BackupError
 from optcg.collection import CollectionError
@@ -76,6 +78,97 @@ def ask_to_continue(question: str) -> bool:
         print("cancelled - nothing changed.")
         return False
     return True
+
+
+# --------------------------------------------------------------------------
+# naming a card
+# --------------------------------------------------------------------------
+
+#: More matches than this aren't offered as a list to pick from - nobody reads
+#: 91 Luffys. The person types more of the name instead.
+MAX_PICK = 10
+
+# OP06-042, ST31-004, EB02-039, P-003: an id that isn't in the catalog gets an
+# "unknown card" error, not a name search that can only come back empty.
+LOOKS_LIKE_AN_ID = re.compile(r"^[A-Za-z]+\d*-\d{3}$")
+
+
+def describe(m: resolve.CardMatch) -> str:
+    """One line that tells same-name cards apart: what they are, and what you own."""
+    cost = f"{m.cost}-cost" if m.cost is not None else ""
+    return (f"{m.base_card_id:<10} {m.name:<28} {m.category:<10} {m.color or '-':<14} "
+            f"{cost:<7} own {m.owned}")
+
+
+def choose_card(conn: sqlite3.Connection, text: str) -> str | None:
+    """Turn what was typed - an id in any case, or part of a name - into a card id.
+
+    One match is used as-is, and said out loud so a wrong match is obvious.
+    Several are offered as a numbered list (D-037). None means stop; the
+    reason has been printed.
+    """
+    exact = resolve.exact_card(conn, text)
+    if exact:
+        return exact
+
+    matches = resolve.find_cards(conn, text)
+    if len(matches) == 1:
+        print(f"{text!r} is {matches[0].base_card_id} {matches[0].name}")
+        return matches[0].base_card_id
+
+    if not matches and LOOKS_LIKE_AN_ID.match(text.strip()):
+        print(f"error: unknown card {text.strip().upper()!r} - not in the card database. "
+              f"If it's from a new set, `optcg sync` may fetch it.", file=sys.stderr)
+        return None
+
+    if not matches:
+        print(f"error: no card matches {text!r}", file=sys.stderr)
+        suggestion = resolve.corrected_query(conn, text)
+        if suggestion:
+            print(f"  did you mean {suggestion!r}?", file=sys.stderr)
+        return None
+
+    if len(matches) > MAX_PICK:
+        print(f"{text!r} matches {len(matches)} cards - type more of the name, or the id.")
+        for m in matches[:MAX_PICK]:
+            print(f"  {describe(m)}")
+        print(f"  ... `find {text}` lists all {len(matches)}")
+        return None
+
+    print(f"{text!r} matches {len(matches)} cards:")
+    for i, m in enumerate(matches, start=1):
+        print(f"  [{i}] {describe(m)}")
+    while True:
+        try:
+            answer = input(f"pick 1-{len(matches)}, or c to cancel: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            print("error: several cards match - use the id instead", file=sys.stderr)
+            return None
+        if answer in ("c", "cancel", ""):
+            print("cancelled - nothing changed.")
+            return None
+        if answer.isdigit() and 1 <= int(answer) <= len(matches):
+            return matches[int(answer) - 1].base_card_id
+        print(f"  type a number from 1 to {len(matches)}, or c")
+
+
+def cmd_find(conn: sqlite3.Connection, args) -> int:
+    text = " ".join(args.text)
+    exact = resolve.exact_card(conn, text)
+    matches = resolve.card_matches(conn, {exact}) if exact else resolve.find_cards(conn, text)
+    if not matches:
+        print(f"no card matches {text!r}")
+        suggestion = resolve.corrected_query(conn, text)
+        if suggestion:
+            print(f"  did you mean {suggestion!r}?")
+        return 1
+    for m in matches:
+        print(f"  {describe(m)}")
+    owned = sum(1 for m in matches if m.owned)
+    print(f"\n  {len(matches)} card(s), {owned} of them owned. "
+          f"`collection show <id>` shows arts and where they are.")
+    return 0
 
 
 # --------------------------------------------------------------------------
@@ -466,7 +559,7 @@ SHELL_BANNER = """optcg shell - type commands without the `optcg` prefix.
 
 
 def split_command(line: str) -> list[str] | None:
-    """Split a shell line like a terminal would. None on an unclosed quote.
+    r"""Split a shell line like a terminal would. None on an unclosed quote.
 
     Backslash is not an escape character, so Windows paths such as
     C:\decks\red.txt survive, and # is not a comment.
@@ -531,9 +624,10 @@ GUIDE = """\
 One Piece TCG collection and deck manager.
 
 how it fits together
-  card id     the gameplay id printed on the card, e.g. OP06-042. Commands
-              take this, not the name.
-  art         which printing a copy is: 'base', or a variant like p1. Optional -
+  card        the id printed on the card, e.g. OP06-042 - or part of its name.
+              A name several cards share gives you a numbered list to pick
+              from; `find <name>` just lists them.
+  art        which printing a copy is: 'base', or a variant like p1. Optional -
               copies start unsorted, and you can say which art later.
   container   where copies physically are: a deck, or a location you create
               (storage box, binder, loan). Cards with nowhere named go to
@@ -548,18 +642,20 @@ getting started
   collection move OP06-060 2 --to "Binder A"
   collection show OP06-060
       how many you own, which arts, and where they are
+  find ichiji
+      every card with that in its name, and how many you own
 
 more help
   help                    this page
   help deck               the deck commands
   help deck import        one command, with examples
 
-The examples are written the way you type them in the shell
-(optcg shell). Outside it, put 'optcg' in front:
+The examples are written the way you type them in the shell, which
+'optcg' on its own opens. Outside it, put 'optcg' in front:
   optcg deck show "Reiju"
 """
 
-ID_HELP = "card id, e.g. OP06-042"
+ID_HELP = "card id (OP06-042) or part of its name (ichiji, \"germa 66\")"
 NAME_HELP = "put it in quotes if it has spaces"
 
 
@@ -930,6 +1026,19 @@ def build_parser() -> argparse.ArgumentParser:
     dry_run_option(p)
     p.set_defaults(func=cmd_backup_import)
 
+    # ---- find -----------------------------------------------------------
+    p = _command(
+        sub, "find", "look a card up by name: its id, what it is, how many you own",
+        "find ichiji",
+        "find monkey d luffy",
+        "find germa 66",
+        description="List every card whose name contains all the words you type. Capitals\n"
+                    "and dots don't matter: 'monkey d luffy' finds Monkey.D.Luffy. No quotes\n"
+                    "needed.",
+    )
+    p.add_argument("text", nargs="+", help="part of a card name, or an id")
+    p.set_defaults(func=cmd_find)
+
     # ---- setup and sync -------------------------------------------------
     p = _command(
         sub, "setup", "first-time setup: create the database and download every card",
@@ -1004,6 +1113,13 @@ def run_dry(args) -> int:
 def run_command(args) -> int:
     conn = connect(args.db)
     try:
+        # Every command that takes a card takes it as `base_card_id`, so a name
+        # is resolved here once rather than in each command (D-037).
+        if getattr(args, "base_card_id", None):
+            chosen = choose_card(conn, args.base_card_id)
+            if chosen is None:
+                return 1
+            args.base_card_id = chosen
         return args.func(conn, args)
     except (CollectionError, StorageError, DeckError, BackupError) as exc:
         print(f"error: {exc}", file=sys.stderr)

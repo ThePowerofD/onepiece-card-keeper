@@ -278,9 +278,9 @@ class CollectionCommandTests(CliTestCase):
         self.assertIn("where they are", out)
 
     def test_show_unknown_card(self):
-        code, out, _ = self.run_cli("collection", "show", "ZZ99-999")
+        code, _, err = self.run_cli("collection", "show", "ZZ99-999")
         self.assertEqual(code, 1)
-        self.assertIn("no card with id", out)
+        self.assertIn("unknown card 'ZZ99-999'", err)
 
     def test_list_filters(self):
         self.run_cli("collection", "add", "OP05-001", "2")
@@ -700,3 +700,118 @@ class EntryPointTests(CliTestCase):
             main(["--help"])
         self.assertIn("usage: optcg", out.getvalue())
         self.assertNotIn("src.cli", out.getvalue())
+
+
+class CardNameTests(CliTestCase):
+    """D-037: a card can be named, with a numbered list when the name is shared."""
+
+    def setUp(self):
+        super().setUp()
+        conn = sqlite3.connect(self.db)
+        conn.execute(
+            "INSERT INTO cards (card_image_id, base_card_id, name, category, color, cost) "
+            "VALUES ('OP06-072', 'OP06-072', 'Cosette', 'Character', 'Purple', 2)"
+        )
+        conn.commit()
+        conn.close()
+
+    def owned(self, card) -> int:
+        conn = sqlite3.connect(self.db)
+        try:
+            return conn.execute(
+                "SELECT COALESCE(SUM(quantity), 0) FROM copies WHERE base_card_id = ?", (card,)
+            ).fetchone()[0]
+        finally:
+            conn.close()
+
+    def test_lowercase_id(self):
+        code, _, _ = self.run_cli("collection", "add", "op05-001", "2")
+        self.assertEqual(code, 0)
+        self.assertEqual(self.owned("OP05-001"), 2)
+
+    def test_a_unique_name_is_used_and_said(self):
+        code, out, _ = self.run_cli("collection", "add", "cosette", "2")
+        self.assertEqual(code, 0)
+        self.assertIn("'cosette' is OP06-072 Cosette", out)
+        self.assertEqual(self.owned("OP06-072"), 2)
+
+    def test_a_shared_name_offers_a_numbered_list(self):
+        # 'card 1' matches Card 1 and Card 10 to Card 13: five cards.
+        with mock.patch("builtins.input", return_value="2") as prompt:
+            code, out, _ = self.run_cli("collection", "add", "card 1", "3")
+        self.assertEqual(code, 0)
+        prompt.assert_called_once()
+        self.assertIn("[1] OP05-001", out)
+        self.assertIn("[5] OP05-013", out)
+        self.assertEqual(self.owned("OP05-010"), 3)  # the second one listed
+
+    def test_c_cancels(self):
+        with mock.patch("builtins.input", return_value="c"):
+            code, out, _ = self.run_cli("collection", "add", "card 1", "3")
+        self.assertEqual(code, 1)
+        self.assertIn("cancelled", out)
+        self.assertEqual(self.owned("OP05-001") + self.owned("OP05-010"), 0)
+
+    def test_a_bad_pick_asks_again(self):
+        with mock.patch("builtins.input", side_effect=["9", "x", "1"]):
+            code, out, _ = self.run_cli("collection", "add", "card 1", "1")
+        self.assertEqual(code, 0)
+        self.assertIn("type a number from 1 to 5", out)
+        self.assertEqual(self.owned("OP05-001"), 1)
+
+    def test_no_console_lists_and_stops(self):
+        with mock.patch("builtins.input", side_effect=EOFError):
+            code, _, err = self.run_cli("collection", "add", "card 1", "1")
+        self.assertEqual(code, 1)
+        self.assertIn("use the id", err)
+
+    def test_too_many_matches_asks_for_more_of_the_name(self):
+        with mock.patch("builtins.input") as prompt:
+            code, out, _ = self.run_cli("collection", "show", "card")
+        self.assertEqual(code, 1)
+        prompt.assert_not_called()
+        self.assertIn("matches 13 cards - type more of the name", out)
+        self.assertIn("`find card` lists all 13", out)
+
+    def test_a_typo_suggests_the_right_words(self):
+        code, _, err = self.run_cli("collection", "show", "cosete")
+        self.assertEqual(code, 1)
+        self.assertIn("did you mean 'cosette'?", err)
+
+    def test_every_card_command_accepts_a_name(self):
+        self.run_cli("location", "add", "Binder A", "--kind", "binder")
+        self.run_cli("location", "add", "Marco", "--kind", "loan")
+        for argv in (["collection", "add", "cosette", "4"],
+                     ["collection", "move", "cosette", "1", "--to", "Binder A"],
+                     ["collection", "set-art", "cosette", "1", "base", "--in", "Binder A"],
+                     ["loan", "cosette", "1", "Marco"],
+                     ["collection", "remove", "cosette", "1"],
+                     ["collection", "show", "cosette"]):
+            code, _, err = self.run_cli(*argv)
+            self.assertEqual(code, 0, f"{argv}: {err}")
+        self.assertEqual(self.owned("OP06-072"), 3)
+
+    def test_find(self):
+        self.run_cli("collection", "add", "cosette", "2")
+        code, out, _ = self.run_cli("find", "cosette")
+        self.assertEqual(code, 0)
+        self.assertIn("OP06-072", out)
+        self.assertIn("own 2", out)
+        self.assertIn("2-cost", out)
+
+    def test_find_takes_several_words_without_quotes(self):
+        code, out, _ = self.run_cli("find", "card", "12")
+        self.assertEqual(code, 0)
+        self.assertIn("OP05-012", out)
+        self.assertIn("1 card(s)", out)
+
+    def test_find_by_id(self):
+        code, out, _ = self.run_cli("find", "op06-072")
+        self.assertEqual(code, 0)
+        self.assertIn("Cosette", out)
+
+    def test_find_nothing(self):
+        code, out, _ = self.run_cli("find", "zzzz")
+        self.assertEqual(code, 1)
+        self.assertIn("no card matches", out)
+
