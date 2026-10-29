@@ -1,6 +1,7 @@
 """Command-line interface for the collection and deck manager.
 
     python -m src.cli deck import mydeck.txt --name "Red Luffy" --physical
+    python -m src.cli deck paste --name "Red Luffy"           # type or paste the list
     python -m src.cli deck show "Red Luffy"
     python -m src.cli collection add OP05-097 4              # unsorted, into just-loose
     python -m src.cli collection move OP05-097 2 --to "Binder A"
@@ -30,6 +31,7 @@ from src.decks import (
     DeckNameExists,
     delete_deck,
     import_deck,
+    import_decklist,
     list_decks,
     set_physical,
     show_deck,
@@ -55,10 +57,33 @@ def warn(lines: list[str], label: str = "warning") -> None:
 # deck
 # --------------------------------------------------------------------------
 
-def cmd_deck_import(conn: sqlite3.Connection, args) -> int:
-    is_physical = not args.wishlist
+# A paste ends on this line rather than a blank one, because decklists often
+# separate their sections with blank lines.
+PASTE_END = "end"
+
+
+def read_pasted_list() -> str:
+    """Collect decklist lines from the console until `end` or end of input."""
+    print(f"paste the list, then type {PASTE_END} on its own line (or Ctrl+Z, Enter):")
+    lines = []
+    while True:
+        try:
+            line = input()
+        except EOFError:
+            break
+        if line.strip().lower() == PASTE_END:
+            break
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _import_and_report(run, on_conflict: str | None) -> int:
+    """Run an import, asking about a name clash, and print the result.
+
+    `run(policy)` does the actual import; file and paste only differ there.
+    """
     try:
-        result = import_deck(conn, args.path, args.name, is_physical, args.on_conflict)
+        result = run(on_conflict)
     except DeckNameExists as exc:
         print(f"A deck named {exc.name!r} already exists (id {exc.deck_id}).")
         print("  [r] replace it   [n] import as a second deck   [c] cancel")
@@ -74,7 +99,7 @@ def cmd_deck_import(conn: sqlite3.Connection, args) -> int:
         if policy is None:
             print("cancelled.")
             return 1
-        result = import_deck(conn, args.path, args.name, is_physical, policy)
+        result = run(policy)
 
     kind = "physical" if result.is_physical else "wishlist"
     action = "replaced" if result.replaced else "created"
@@ -87,6 +112,23 @@ def cmd_deck_import(conn: sqlite3.Connection, args) -> int:
         print("  collection:    untouched (wishlist)")
     warn(result.warnings)
     return 0
+
+
+def cmd_deck_import(conn: sqlite3.Connection, args) -> int:
+    is_physical = not args.wishlist
+    return _import_and_report(
+        lambda policy: import_deck(conn, args.path, args.name, is_physical, policy),
+        args.on_conflict,
+    )
+
+
+def cmd_deck_paste(conn: sqlite3.Connection, args) -> int:
+    is_physical = not args.wishlist
+    text = read_pasted_list()
+    return _import_and_report(
+        lambda policy: import_decklist(conn, text, args.name, is_physical, policy),
+        args.on_conflict,
+    )
 
 
 def cmd_deck_list(conn: sqlite3.Connection, args) -> int:
@@ -371,6 +413,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--wishlist", action="store_true", help="a deck you want to build")
     p.add_argument("--on-conflict", choices=["replace", "new"], help="skip the prompt if the name exists")
     p.set_defaults(func=cmd_deck_import)
+
+    p = deck.add_parser("paste", help=f"type or paste a decklist, ending with '{PASTE_END}'")
+    p.add_argument("--name", required=True, help="deck name")
+    p.add_argument("--physical", action="store_true", help="a deck you have sleeved (default)")
+    p.add_argument("--wishlist", action="store_true", help="a deck you want to build")
+    p.add_argument("--on-conflict", choices=["replace", "new"], help="skip the prompt if the name exists")
+    p.set_defaults(func=cmd_deck_paste)
 
     p = deck.add_parser("list", help="list all decks")
     p.set_defaults(func=cmd_deck_list)

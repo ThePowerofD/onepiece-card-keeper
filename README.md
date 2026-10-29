@@ -101,6 +101,7 @@ optcg> exit
 # Decks — importing a sleeved deck also credits your collection
 python -m src.cli deck import mydeck.txt --name "Red Luffy" --physical
 python -m src.cli deck import wanted.txt --name "Purple Doffy" --wishlist
+python -m src.cli deck paste --name "Red Luffy"  # type/paste the list, finish with: end
 python -m src.cli deck list
 python -m src.cli deck show "Red Luffy"          # owned vs missing per card
 python -m src.cli deck set-physical "Purple Doffy"
@@ -189,7 +190,7 @@ src/
   sanitize.py     pure cleaning functions, one per rule — no DB, no side effects
   known_types.py  seeds the card-type vocabulary
   sync.py         orchestrator: fetch → sanitize → upsert
-  deck_parser.py  Limitless decklist format — pure, never raises
+  deck_parser.py  Limitless and deckbuilder-export decklists — pure, never raises
   resolve.py      gameplay id → printings; picks the printing an import credits
   collection.py   what you own, with the availability guard
   storage.py      storage locations and placements

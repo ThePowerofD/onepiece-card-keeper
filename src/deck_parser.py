@@ -16,6 +16,14 @@ Input looks like:
 
 Section headers may carry a card on the same line ("Leader: 1 ... OP05-001") or
 stand alone with cards on following lines.
+
+The deckbuilder-export style is read too - no colon, a count in brackets, and
+ids in brackets:
+
+    Leader
+    1 Vinsmoke Reiju (OP06-042)
+    Character (40)
+    4 Vinsmoke Ichiji (OP06-060)
 """
 
 from __future__ import annotations
@@ -32,6 +40,11 @@ DON_HEADERS = {"don!!", "don"}
 
 # "4", "x4" and "4x" all mean four.
 QUANTITY_RE = re.compile(r"^(?:x(\d+)|(\d+)x?)$", re.IGNORECASE)
+
+# A header with no colon: "Leader", "Character (40)". The count is ignored -
+# the cards are counted from their own lines. Text after the count is kept, so
+# a paste that lost its line break ("Stage (4)4 Kingdom of GERMA ...") still reads.
+BARE_HEADER_RE = re.compile(r"^([A-Za-z!]+)\s*(?:\(\d+\)\s*(.*))?$")
 
 # OP05-097, ST01-001, P-029, PRB01-001, optionally with a printing suffix.
 CARD_ID_RE = re.compile(r"^[A-Za-z]+\d*-\d+(?:[_-][A-Za-z]+\d+)?$")
@@ -61,14 +74,18 @@ def parse_quantity(token: str) -> int | None:
 def split_header(line: str) -> tuple[str | None, str]:
     """Split 'Leader: 1 Luffy OP05-001' into ('leader', '1 Luffy OP05-001').
 
-    Returns (None, line) when the line carries no recognised section header.
+    Also reads 'Leader' and 'Character (40)' with no colon. Returns (None, line)
+    when the line carries no recognised section header.
     """
-    if ":" not in line:
-        return None, line
-    head, _, rest = line.partition(":")
-    key = head.strip().lower()
-    if key in SECTION_HEADERS:
-        return key, rest.strip()
+    if ":" in line:
+        head, _, rest = line.partition(":")
+        key = head.strip().lower()
+        if key in SECTION_HEADERS:
+            return key, rest.strip()
+
+    m = BARE_HEADER_RE.match(line)
+    if m and m.group(1).lower() in SECTION_HEADERS:
+        return m.group(1).lower(), (m.group(2) or "").strip()
     return None, line
 
 
@@ -87,7 +104,7 @@ def parse_card_line(line: str) -> tuple[DeckCard | None, str | None]:
     if quantity is None:
         return None, f"unreadable quantity {tokens[0]!r}"
 
-    raw_id = tokens[-1]
+    raw_id = tokens[-1].strip("()")  # "(OP06-042)" in deckbuilder exports
     if not CARD_ID_RE.match(raw_id):
         return None, f"unreadable card id {raw_id!r}"
 

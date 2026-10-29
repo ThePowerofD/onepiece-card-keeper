@@ -13,7 +13,8 @@ Describes what's **built** — Phase 0 and Phase 1 are both complete.
 ## 1. Goals
 
 - Track inventory at **printing level** — base art, alt arts and reprints are distinct.
-- Import decks from Limitless TCG paste format.
+- Import decks from Limitless TCG paste format, or the deckbuilder-export style
+  (`Character (40)` headers, `(OP06-042)` ids).
 - Distinguish cards locked in sleeved decks from cards free to use.
 - Show deck completion (owned vs missing) for any decklist, including decks you can't yet build.
 - Run locally on one machine — not hosted, not multi-user.

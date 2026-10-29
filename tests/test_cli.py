@@ -177,6 +177,54 @@ class DeckCommandTests(CliTestCase):
         self.assertIn("wishlist", out)
 
 
+class DeckPasteTests(CliTestCase):
+    def paste(self, lines, *extra) -> tuple[int, str, str]:
+        with mock.patch("builtins.input", side_effect=lines):
+            return self.run_cli("deck", "paste", "--name", "Red", *extra)
+
+    def deck_lines(self) -> list[str]:
+        return self.decklist.read_text(encoding="utf-8").splitlines()
+
+    def test_paste_ending_with_end(self):
+        code, out, _ = self.paste([*self.deck_lines(), "END"])
+        self.assertEqual(code, 0)
+        self.assertIn("created physical deck 'Red'", out)
+        self.assertIn("+51 copies", out)
+
+    def test_paste_ending_with_end_of_input(self):
+        code, out, _ = self.paste([*self.deck_lines(), EOFError])
+        self.assertEqual(code, 0)
+        self.assertIn("+51 copies", out)
+
+    def test_blank_lines_do_not_end_the_paste(self):
+        lines = self.deck_lines()
+        lines.insert(3, "")
+        code, out, _ = self.paste([*lines, "end"])
+        self.assertEqual(code, 0)
+        self.assertIn("+51 copies", out)
+
+    def test_paste_matches_file_import(self):
+        _, pasted, _ = self.paste([*self.deck_lines(), "end"], "--wishlist")
+        _, imported, _ = self.run_cli("deck", "import", str(self.decklist),
+                                      "--name", "Red", "--wishlist", "--on-conflict", "new")
+        self.assertEqual(pasted.splitlines()[-3:], imported.splitlines()[-3:])
+
+    def test_empty_paste_is_a_clean_error(self):
+        code, _, err = self.paste(["end"])
+        self.assertEqual(code, 1)
+        self.assertIn("no recognisable cards", err)
+
+    def test_name_is_required(self):
+        with self.assertRaises(SystemExit):
+            self.run_cli("deck", "paste")
+
+    def test_name_clash_asks_after_the_paste(self):
+        self.paste([*self.deck_lines(), "end"])
+        code, out, _ = self.paste([*self.deck_lines(), "end", "r"])
+        self.assertEqual(code, 0)
+        self.assertIn("replaced", out)
+
+
 class CollectionCommandTests(CliTestCase):
     def test_add_move_and_remove(self):
         code, out, _ = self.run_cli("collection", "add", "OP05-001", "3")
@@ -418,6 +466,14 @@ class ShellTests(CliTestCase):
         self.assertEqual(code, 0)
         _, out, _ = self.run_cli("collection", "list", "--owned-only")
         self.assertIn("OP05-001", out)
+
+    def test_deck_paste_inside_the_shell(self):
+        code, out, _ = self.run_shell(
+            "deck paste --name Red", *self.decklist.read_text(encoding="utf-8").splitlines(),
+            "end", "deck list",
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("created physical deck 'Red'", out)
 
     def test_nested_shell_is_refused(self):
         code, out, _ = self.run_shell("shell")

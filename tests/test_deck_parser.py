@@ -64,6 +64,26 @@ class SplitHeaderTests(unittest.TestCase):
         line = "1 Gum-Gum: Giant OP05-060"
         self.assertEqual(split_header(line), (None, line))
 
+    def test_bare_header(self):
+        self.assertEqual(split_header("Leader"), ("leader", ""))
+
+    def test_bare_header_with_count(self):
+        self.assertEqual(split_header("Character (40)"), ("character", ""))
+        self.assertEqual(split_header("DON!! (10)"), ("don!!", ""))
+
+    def test_counted_header_that_lost_its_line_break(self):
+        self.assertEqual(
+            split_header("Stage (4)4 Kingdom of GERMA (OP06-079)"),
+            ("stage", "4 Kingdom of GERMA (OP06-079)"),
+        )
+
+    def test_word_that_is_not_a_header_passes_through(self):
+        self.assertEqual(split_header("Sideboard (5)"), (None, "Sideboard (5)"))
+
+    def test_header_word_without_a_count_is_not_a_header(self):
+        line = "Leader 1 Luffy OP05-001"
+        self.assertEqual(split_header(line), (None, line))
+
 
 class ParseCardLineTests(unittest.TestCase):
     def test_simple_line(self):
@@ -87,6 +107,11 @@ class ParseCardLineTests(unittest.TestCase):
     def test_name_containing_digits_and_punctuation(self):
         card, _ = parse_card_line("1 Monkey.D.Luffy (041) P-041")
         self.assertEqual(card, DeckCard("P-041", 1, "Monkey.D.Luffy (041)"))
+
+    def test_bracketed_id(self):
+        card, reason = parse_card_line("1 Vinsmoke Reiju (OP06-042)")
+        self.assertIsNone(reason)
+        self.assertEqual(card, DeckCard("OP06-042", 1, "Vinsmoke Reiju"))
 
     def test_missing_name_still_parses(self):
         card, reason = parse_card_line("4 OP05-097")
@@ -123,6 +148,23 @@ class ParseDecklistTests(unittest.TestCase):
             ],
         )
         self.assertEqual(deck.warnings, [])
+
+    def test_deckbuilder_export_format(self):
+        text = (
+            "Leader\n"
+            "1 Vinsmoke Reiju (OP06-042)\n"
+            "Character (40)\n"
+            "2 Trafalgar Law (ST03-008)\n"
+            "4 Vinsmoke Ichiji (OP06-060)\n"
+            "Stage (4)4 Kingdom of GERMA (OP06-079)\n"
+        )
+        deck = parse_decklist(text)
+        self.assertEqual(deck.warnings, [])
+        self.assertEqual(deck.leader_id, "OP06-042")
+        self.assertEqual(
+            [(c.base_card_id, c.quantity) for c in deck.cards],
+            [("ST03-008", 2), ("OP06-060", 4), ("OP06-079", 4)],
+        )
 
     def test_don_line_is_ignored(self):
         deck = parse_decklist(FULL_LIST)
