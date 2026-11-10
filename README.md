@@ -32,7 +32,7 @@ optcg setup                          # create the database, download every card
 > `venv\Scripts\activate` by default on a fresh machine. Allow scripts you run
 > yourself, once:
 >
-> ```
+> ```text
 > Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 > ```
 >
@@ -42,7 +42,7 @@ optcg setup                          # create the database, download every card
 **Every time**, activate the venv and type `optcg`. That opens the shell, where
 you type commands one after another without any prefix:
 
-```
+```text
 optcg
 optcg> deck show "Reiju"
 optcg> exit
@@ -53,7 +53,7 @@ front: `optcg deck show "Reiju"`.
 
 **Help is built in, at three levels**, and every level ends with examples:
 
-```
+```text
 help                     the guide: how it fits together, and where to start
 help collection          every command in a group, one line each
 help collection add      one command: what it does, its options, examples
@@ -80,7 +80,7 @@ you named are in your deck, `optcg setup` when the database isn't set up yet.
 
 **A handful of commands cover almost everything:**
 
-```
+```text
 deck import mydeck.txt --name "Reiju"      a deck you own - its cards join your collection
 deck show "Reiju"                          what you own vs what's missing
 collection add OP06-060 2                  loose cards you own
@@ -130,8 +130,8 @@ real cards with images, know where each one is, and can check a decklist against
 what I own.* The old Phase 2 (CLI-only insights) became Phase 3 and will be built
 as UI instead of terminal tables. See **D-024** for the reasoning.
 
-| | |
-|---|---|
+| --- | --- |
+| --- | --- |
 | Unique printings (`cards`) | 4,712 |
 | Unique gameplay cards (`base_card_id`) | 2,797 |
 | Sets covered | OP01–OP17, EB01–EB04, ST01–ST36, PRB01–02, promos |
@@ -168,7 +168,7 @@ python -m pytest tests/ --cov=optcg --cov-report=term-missing   # coverage (97%)
 
 **Verify it worked.** You should see:
 
-```
+```text
 === Sync summary ===
   Total rows fetched: 4716
   Inserted/updated:   4712
@@ -202,7 +202,7 @@ Everything runs through one entry point. `--help` works at every level.
 For entering a lot at once, `optcg shell` opens an `optcg>` prompt
 that takes the same commands without the prefix, until `exit`:
 
-```
+```text
 optcg> collection add OP05-097 4
 optcg> collection add OP05-020 3 --to "Binder A"
 optcg> exit
@@ -273,7 +273,7 @@ optcg backup list
 "did you mean" if the name is close to one you have, so a typo never creates a
 junk binder. The same goes for a storage type you haven't added yet.
 
-```
+```bash
 $ collection move OP05-097 2 --to "Bindr A"
 'Bindr A' doesn't exist yet.
   [1] use binder 'Binder A'
@@ -354,7 +354,7 @@ optcg deck show "Red Luffy"      # what is in it
 
 ## Layout
 
-```
+```text
 optcg/
   db_setup.py     schema creation; connect() is the shared connection factory
   api_client.py   OptcgAPI HTTP client (three endpoints)
@@ -379,7 +379,7 @@ data/             optcg.db, cache/ and backups/ (all gitignored)
 Five files, each with one job. Nothing is documented in two places.
 
 | File | What it's for | How often it changes |
-|---|---|---|
+| --- | --- | --- |
 | **README.md** | This file — what it is, where it stands, how to run it | Every session |
 | **[DESIGN.md](DESIGN.md)** | What **exists** — model, schema, rules, API | When the system changes |
 | **[PHASE_2.md](PHASE_2.md)** | Phase 2 milestones — the MVP, **current** | While working the phase |
@@ -399,3 +399,4 @@ the most time and the one the code can't answer.
 - **Update "where the project is" above at the end of a session.** It's short on
   purpose — if it grows past a screen it becomes a chore, you'll stop updating
   it, and it'll start lying to you.
+  
