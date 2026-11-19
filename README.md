@@ -89,6 +89,7 @@ find ichiji                                every card with that in its name, and
 collection list                            everything you own
 browse --set OP17                          every card in the game, owned or not
 storage add "Binder A" --type binder      a place to keep cards
+storage import batch.txt --to "Binder A"  a file of new cards into that place
 collection move OP06-060 2 --to "Binder A"
 ```
 
@@ -109,7 +110,7 @@ touched.
 
 ## Where the project is right now
 
-**Last updated: 2026-10-29 — Phase 2, M0 under way: real cards are going in.**
+**Last updated: 2026-11-18 — Phase 2, M0 under way: real cards are going in.**
 
 The card database is built, and the CLI covers the whole loop: import decklists
 (Limitless or deckbuilder-export, from a file or pasted in), track what you own
@@ -118,9 +119,10 @@ by card, and see what's missing for a deck you want to build. It's one command,
 `optcg`, which opens a shell; cards can be named instead of typed by id, and
 every error says what to type next (D-036 to D-042).
 
-**Real data has started.** The first real deck, Reiju, is in: 51 copies of 18
-cards, arts not yet sorted. From here the database holds data that exists
-nowhere else, so it's protected now (D-032, D-034): destructive commands
+**Real data has started.** Three real decks are in (Reiju, Nico Robin, Eustass
+Kid) and a trading binder: 164 copies, arts not yet sorted. A batch of new
+cards for one place goes in with `storage import` (D-043). From here the
+database holds data that exists nowhere else, so it's protected now (D-032, D-034): destructive commands
 snapshot the database first and ask when something would be lost, imports take
 `--dry-run`, and `backup export` writes a JSON copy that can be moved to
 another machine.
@@ -136,8 +138,8 @@ as UI instead of terminal tables. See **D-024** for the reasoning.
 | Unique gameplay cards (`base_card_id`) | 2,797 |
 | Sets covered | OP01–OP17, EB01–EB04, ST01–ST36, PRB01–02, promos |
 | Bad rows in logs | none |
-| Owned so far | 51 copies, 1 deck |
-| Tests | 615 passing |
+| Owned so far | 164 copies: 3 decks, 1 binder |
+| Tests | 639 passing |
 
 **Known limitation:** OptcgAPI lags the real game. It caught up to **OP17** by
 2026-10-29 (synced that day: 158 new OP17 printings, ST31–ST36, and three new
@@ -179,7 +181,7 @@ python -m pytest tests/ --cov=optcg --cov-report=term-missing   # coverage (97%)
   Stale printings:    0
 ```
 
-...and 615 passing tests. Anything else means something changed upstream —
+...and 639 passing tests. Anything else means something changed upstream —
 `Unknown sub_types` above 0 usually means a new set introduced a card type;
 add it to `SEED_TYPES` in `optcg/known_types.py` and re-sync. `Stale printings`
 above 0 means the API stopped sending some rows; they are kept, and if you own
@@ -253,6 +255,8 @@ optcg storage add "Friend 1" --type loan
 optcg storage add "Shelf 2"                 # no --type: you're asked which
 optcg storage list                          # grouped by type
 optcg storage show "Mewtwo Binder"          # what's in it, art by art
+optcg storage import pulls_2026-11-25.txt --to "Mewtwo Binder"   # a file of new cards
+optcg storage import pulls_2026-11-25.txt --to "Mewtwo Binder" --dry-run
 optcg storage show                          # defaults to just-loose
 optcg storage rename "OP13 Box" "OP13 Storage"
 optcg storage delete "OP13 Storage"         # asks first if it holds copies

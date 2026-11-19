@@ -1460,3 +1460,34 @@ internal names followed (`in_deck_total`), and `unsleeved`, `unsleeved_total`
 and `is_built` were removed: under D-041 there is nothing for them to measure.
 A test sweeps every command's help so the word doesn't creep back.
 
+---
+
+## D-043 — A batch of cards for one place comes in from a file, whole or not at all
+
+**2026-11-18** · *Adds `storage import`; goes with D-034 and D-041*
+
+Filling a binder meant one `collection add` per card. The owner keeps a text
+file per batch of real cards (`decklists/trading_binder.txt`, 8 lines, 11
+copies); `storage import <file> --to <place>` adds all of it. The lines are the
+decklist format (`2 Hack (OP12-089)`), read by `parse_card_list` - a sibling of
+`parse_decklist` because a batch has no leader: a `Leader` line is just a card
+and no leader is expected. Copies land unsorted; no art in the file yet.
+
+**All or nothing, unlike a decklist.** A decklist with an unknown id imports
+the rest with a warning (D-006), and re-importing is safe because a physical
+deck places only its shortfall (D-022). A batch is the opposite: every line is
+*new* copies, so running a file twice adds it twice. If a bad line let the rest
+land, fixing the typo and re-running would count the good lines again. So an
+unreadable line or an unknown id stops the whole file and nothing is written
+(`collection.add_many`, one transaction). `--dry-run` works, as on the other
+imports (D-034).
+
+**One batch, one file.** The file isn't linked to the database and nothing
+remembers which files were imported - the database is the record, and
+`storage show` says what a place holds. New cards for the same binder go in a
+new, dated file rather than at the bottom of the old one. Recording imported
+files to refuse a repeat was considered and left out: it would also refuse a
+second batch that happens to have the same name, and the help says it plainly.
+
+Importing into a physical deck works like `collection add` into it: the list
+grows with the copies (D-041). A wishlist deck is refused.

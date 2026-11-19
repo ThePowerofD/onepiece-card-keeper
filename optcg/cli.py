@@ -56,6 +56,7 @@ from optcg.decks import (
     set_physical,
     show_deck,
 )
+from optcg.deck_parser import parse_card_list
 from optcg.storage import StorageError
 
 
@@ -639,6 +640,35 @@ def cmd_storage_add(conn: sqlite3.Connection, args) -> int:
         return 1
     store.add_location(conn, args.name, kind, args.notes)
     print(f"created {kind} {args.name!r}")
+    return 0
+
+
+def cmd_storage_import(conn: sqlite3.Connection, args) -> int:
+    """Add a batch of cards from a file to one place, all or nothing (D-043)."""
+    path = Path(args.path)
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except OSError as exc:
+        print(f"error: could not read {path}: {exc}", file=sys.stderr)
+        return 1
+    parsed = parse_card_list(text)
+    if parsed.warnings:
+        print(f"error: {path.name} has lines that can't be read - nothing was added:",
+              file=sys.stderr)
+        for line in parsed.warnings:
+            print(f"  {line}", file=sys.stderr)
+        print("  fix them and run it again", file=sys.stderr)
+        return 1
+    if not parsed.cards:
+        print(f"error: no cards found in {path.name}", file=sys.stderr)
+        return 1
+    to = destination(conn, args.to, args.kind)
+    if to is None:
+        return 1
+    added = coll.add_many(conn, [(c.base_card_id, c.quantity) for c in parsed.cards], to)
+    for c in parsed.cards:
+        print(f"  {c.base_card_id:<12} +{c.quantity}  {c.name}")
+    print(f"added {added} copies of {len(parsed.cards)} card(s) to {to.kind} {to.name!r}, unsorted")
     return 0
 
 
@@ -1325,6 +1355,25 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_storage_add)
 
     p = _command(
+        stor, "import", "add a batch of cards from a text file to one place",
+        'storage import decklists\\trading_binder_2026-11-25.txt --to "trading_binder"',
+        'storage import new_pulls.txt --to "OP13 Box" --dry-run',
+        description="Add the cards in a text file to a storage place - new copies, like\n"
+                    "`collection add` for every line. One card per line, as in a decklist:\n"
+                    "  2 Hack (OP12-089)\n"
+                    "Every line is checked first: if one can't be read or its id isn't a\n"
+                    "card, nothing is added. Running the same file twice adds it twice -\n"
+                    "put each new batch in a new file.",
+    )
+    p.add_argument("path", help="the text file")
+    p.add_argument("--to", required=True, metavar="<place>",
+                   help="where the cards go - offered to be created if it doesn't exist")
+    p.add_argument("--type", dest="kind", metavar=type_metavar, default=None,
+                   help=f"the place's type - {kind_note}")
+    dry_run_option(p)
+    p.set_defaults(func=cmd_storage_import)
+
+    p = _command(
         stor, "list", "every storage place, grouped by type",
         "storage list",
         "storage list --type binder",
@@ -1557,7 +1606,7 @@ def not_ready(conn: sqlite3.Connection, args) -> str | None:
     if not {"cards", "copies", "decks", "storage_locations"} <= tables:
         return "the database isn't set up yet - run `optcg setup` first"
     needs_cards = getattr(args, "base_card_id", None) or args.func in (
-        cmd_find, cmd_deck_import, cmd_deck_paste, cmd_browse,
+        cmd_find, cmd_deck_import, cmd_deck_paste, cmd_browse, cmd_storage_import,
     )
     if needs_cards and conn.execute("SELECT 1 FROM cards LIMIT 1").fetchone() is None:
         return "no cards downloaded yet - run `optcg sync`"

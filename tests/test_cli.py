@@ -437,6 +437,85 @@ class StorageCommandTests(CliTestCase):
         self.assertIn("is a wishlist deck", err)
 
 
+class StorageImportTests(CliTestCase):
+    """D-043: `storage import` adds a batch file to one place, whole or not at all."""
+
+    def setUp(self):
+        super().setUp()
+        self.run_cli("storage", "add", "Trade", "--type", "binder")
+        self.batch = Path(self.tmp.name) / "batch.txt"
+
+    def write(self, text):
+        self.batch.write_text(text, encoding="utf-8")
+
+    def test_adds_every_line_to_the_place(self):
+        self.write("Character (3)\r\n1 Card 1 (OP05-001)\r\n2 Card 2 (OP05-002)")
+        code, out, _ = self.run_cli("storage", "import", str(self.batch), "--to", "Trade")
+        self.assertEqual(code, 0)
+        self.assertIn("added 3 copies of 2 card(s) to binder 'Trade'", out)
+        _, out, _ = self.run_cli("storage", "show", "Trade")
+        self.assertIn("3 copies, 2 card(s)", out)
+
+    def test_unreadable_line_adds_nothing(self):
+        self.write("1 Card 1 (OP05-001)\nCard 2 OP05-002\n")
+        code, _, err = self.run_cli("storage", "import", str(self.batch), "--to", "Trade")
+        self.assertEqual(code, 1)
+        self.assertIn("line 2", err)
+        self.assertIn("nothing was added", err)
+        _, out, _ = self.run_cli("storage", "show", "Trade")
+        self.assertNotIn("OP05-001", out)
+
+    def test_unknown_id_adds_nothing(self):
+        self.write("1 Card 1 (OP05-001)\n1 Nope (OP99-999)\n")
+        code, _, err = self.run_cli("storage", "import", str(self.batch), "--to", "Trade")
+        self.assertEqual(code, 1)
+        self.assertIn("OP99-999", err)
+        _, out, _ = self.run_cli("storage", "show", "Trade")
+        self.assertNotIn("OP05-001", out)
+
+    def test_dry_run_saves_nothing(self):
+        self.write("2 Card 1 (OP05-001)\n")
+        code, out, _ = self.run_cli("storage", "import", str(self.batch), "--to", "Trade", "--dry-run")
+        self.assertEqual(code, 0)
+        self.assertIn("dry run - nothing was saved", out)
+        _, out, _ = self.run_cli("storage", "show", "Trade")
+        self.assertNotIn("OP05-001", out)
+
+    def test_missing_file(self):
+        code, _, err = self.run_cli("storage", "import", "nope.txt", "--to", "Trade")
+        self.assertEqual(code, 1)
+        self.assertIn("could not read", err)
+
+    def test_empty_file(self):
+        self.write("")
+        code, _, err = self.run_cli("storage", "import", str(self.batch), "--to", "Trade")
+        self.assertEqual(code, 1)
+        self.assertIn("no cards found", err)
+
+    def test_to_is_required(self):
+        with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
+            main(["--db", str(self.db), "storage", "import", "x.txt"])
+
+    def test_unknown_place_cancelled_adds_nothing(self):
+        self.write("2 Card 1 (OP05-001)\n")
+        with mock.patch("builtins.input", return_value="c"):
+            code, out, _ = self.run_cli("storage", "import", str(self.batch), "--to", "Nowhere")
+        self.assertEqual(code, 1)
+        self.assertIn("'Nowhere' doesn't exist yet", out)
+        _, out, _ = self.run_cli("collection", "list")
+        self.assertNotIn("OP05-001", out)
+
+    def test_unknown_place_can_be_created_on_the_spot(self):
+        self.write("2 Card 1 (OP05-001)\n")
+        with mock.patch("builtins.input", return_value="n"):
+            code, out, _ = self.run_cli("storage", "import", str(self.batch),
+                                        "--to", "New Box", "--type", "binder")
+        self.assertEqual(code, 0)
+        self.assertIn("created binder 'New Box'", out)
+        _, out, _ = self.run_cli("storage", "show", "New Box")
+        self.assertIn("2 copies, 1 card(s)", out)
+
+
 class CliEdgeTests(CliTestCase):
     def test_list_with_no_matches(self):
         code, out, _ = self.run_cli("browse", "--set", "ZZ-99")

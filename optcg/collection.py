@@ -397,6 +397,40 @@ def add(
     return total_owned(conn, base_card_id)
 
 
+def add_many(
+    conn: sqlite3.Connection,
+    entries: list[tuple[str, int]],
+    to: Container,
+) -> int:
+    """Record a batch of acquired copies into one container, all or nothing (D-043).
+
+    Every id and quantity is checked before anything is written, and the batch
+    lands in one transaction. A batch that half-landed couldn't safely be run
+    again: the half that made it in would be counted twice. Copies land
+    unsorted. Returns how many copies were added.
+    """
+    for _, qty in entries:
+        _check_quantity(qty)
+    unknown = [cid for cid, _ in entries if not conn.execute(
+        "SELECT 1 FROM cards WHERE base_card_id = ? LIMIT 1", (cid,)
+    ).fetchone()]
+    if unknown:
+        raise CollectionError(
+            f"not in the card database: {', '.join(unknown)} - nothing was added"
+        )
+    _refuse_wishlist(conn, to)
+    try:
+        for base_card_id, qty in entries:
+            _deposit(conn, base_card_id, None, to, qty)
+            if to.deck_id is not None:
+                adjust_recipe(conn, to.deck_id, base_card_id, qty)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return sum(qty for _, qty in entries)
+
+
 def remove(
     conn: sqlite3.Connection,
     base_card_id: str,

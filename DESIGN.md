@@ -273,8 +273,8 @@ There is no `unplaced`: a copy with no container can't exist, and one you haven'
 filed is in `just-loose`.
 
 **A physical deck's list is its contents** (D-041, superseding D-030's
-incomplete decks). Every change to a physical deck's copies - `add`, `remove`,
-`move` in or out, a replace import - changes `deck_cards` by the same amount, in
+incomplete decks). Every change to a physical deck's copies - `add`,
+`add_many`, `remove`, `move` in or out, a replace import - changes `deck_cards` by the same amount, in
 the same transaction (`collection.adjust_recipe`). So `recipe − in that deck`
 is always 0 for a physical deck; a short deck is just a smaller list. A wishlist
 deck is recipe-only and refuses copies.

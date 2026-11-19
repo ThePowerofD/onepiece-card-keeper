@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import sqlite3
 import unittest
+from unittest import mock
 
+from optcg import collection as collection_module
 from optcg.collection import (
     CollectionError,
     add,
+    add_many,
     committed,
     committed_elsewhere,
     empty_container,
@@ -111,6 +114,60 @@ class AddTests(Base):
             with self.assertRaises(CollectionError):
                 add(self.conn, "OP05-097", bad)
 
+
+class AddManyTests(Base):
+    """D-043: a batch lands whole or not at all."""
+
+    def setUp(self):
+        super().setUp()
+        add_location(self.conn, "Binder A", "binder")
+        self.binder = resolve_container(self.conn, "Binder A")
+
+    def test_batch_lands_unsorted_in_the_place(self):
+        self.assertEqual(add_many(self.conn, [("OP05-097", 2), ("OP05-002", 1)], self.binder), 3)
+        self.assertEqual(slots(self.conn, "OP05-097"), [(None, self.binder.location_id, None, 2)])
+        self.assertEqual(slots(self.conn, "OP05-002"), [(None, self.binder.location_id, None, 1)])
+
+    def test_one_unknown_id_adds_nothing(self):
+        with self.assertRaises(CollectionError) as ctx:
+            add_many(self.conn, [("OP05-097", 2), ("XX99-999", 1)], self.binder)
+        self.assertIn("XX99-999", str(ctx.exception))
+        self.assertEqual(total_owned(self.conn, "OP05-097"), 0)
+
+    def test_bad_quantity_adds_nothing(self):
+        with self.assertRaises(CollectionError):
+            add_many(self.conn, [("OP05-097", 2), ("OP05-002", 0)], self.binder)
+        self.assertEqual(total_owned(self.conn, "OP05-097"), 0)
+
+    def test_wishlist_deck_is_refused(self):
+        deck_id = add_deck(self.conn, "Wish", is_physical=False)
+        with self.assertRaises(CollectionError):
+            add_many(self.conn, [("OP05-097", 1)], deck_container(self.conn, deck_id))
+        self.assertEqual(total_owned(self.conn, "OP05-097"), 0)
+
+    def test_into_a_physical_deck_grows_its_list(self):
+        deck_id = add_deck(self.conn, "Red")
+        add_many(self.conn, [("OP05-097", 2)], deck_container(self.conn, deck_id))
+        row = self.conn.execute(
+            "SELECT quantity FROM deck_cards WHERE deck_id = ? AND base_card_id = 'OP05-097'",
+            (deck_id,)).fetchone()
+        self.assertEqual(row, (2,))
+
+    def test_failure_partway_through_writes_nothing(self):
+        real = collection_module._deposit
+        calls = []
+
+        def fail_on_second(*args, **kwargs):
+            calls.append(args)
+            if len(calls) == 2:
+                raise sqlite3.OperationalError("disk I/O error")
+            return real(*args, **kwargs)
+
+        with mock.patch.object(collection_module, "_deposit", side_effect=fail_on_second):
+            with self.assertRaises(sqlite3.OperationalError):
+                add_many(self.conn, [("OP05-097", 2), ("OP05-002", 1)], self.binder)
+        self.assertEqual(total_owned(self.conn, "OP05-097"), 0)
+        self.assertEqual(total_owned(self.conn, "OP05-002"), 0)
 
 class ResolveArtTests(Base):
     def test_none_means_unsorted(self):

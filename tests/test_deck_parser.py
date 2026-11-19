@@ -11,6 +11,7 @@ import unittest
 from optcg.deck_parser import (
     DeckCard,
     parse_card_line,
+    parse_card_list,
     parse_decklist,
     parse_quantity,
     split_header,
@@ -233,3 +234,52 @@ class ParseDecklistTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ParseCardListTests(unittest.TestCase):
+    """A batch for a binder: decklist lines, but nothing is a leader (D-043)."""
+
+    def test_deckbuilder_style_without_a_leader(self):
+        text = "Character (3)\r\n1 Shirahoshi (OP12-102)\r\n2 Hack (OP12-089)"
+        parsed = parse_card_list(text)
+        self.assertEqual(parsed.warnings, [])
+        self.assertEqual([(c.base_card_id, c.quantity) for c in parsed.cards],
+                         [("OP12-102", 1), ("OP12-089", 2)])
+
+    def test_no_headers_at_all(self):
+        parsed = parse_card_list("2 Hack (OP12-089)\n1 Jinbe OP12-009\n")
+        self.assertEqual(len(parsed.cards), 2)
+        self.assertEqual(parsed.warnings, [])
+
+    def test_leader_section_is_just_another_card(self):
+        parsed = parse_card_list("Leader\n1 Kid (OP10-099)\n1 Kid (OP10-099)\n")
+        self.assertEqual([(c.base_card_id, c.quantity) for c in parsed.cards], [("OP10-099", 2)])
+        self.assertEqual(parsed.warnings, [])
+
+    def test_duplicates_are_summed_in_first_seen_order(self):
+        parsed = parse_card_list("1 A OP12-001\n2 B OP12-002\n3 A OP12-001\n")
+        self.assertEqual([(c.base_card_id, c.quantity) for c in parsed.cards],
+                         [("OP12-001", 4), ("OP12-002", 2)])
+
+    def test_don_is_dropped(self):
+        parsed = parse_card_list("DON!!: x10\n1 A OP12-001\n")
+        self.assertEqual([c.base_card_id for c in parsed.cards], ["OP12-001"])
+
+    def test_unreadable_line_warns_with_its_number(self):
+        parsed = parse_card_list("1 A OP12-001\nHack OP12-089\n")
+        self.assertEqual(len(parsed.cards), 1)
+        self.assertEqual(len(parsed.warnings), 1)
+        self.assertIn("line 2", parsed.warnings[0])
+
+    def test_empty_text(self):
+        self.assertEqual(parse_card_list(""), ([], []))
+
+    def test_header_with_a_card_on_the_same_line(self):
+        parsed = parse_card_list("Character: 2 Hack OP12-089\n1 Jinbe OP12-009\n")
+        self.assertEqual([(c.base_card_id, c.quantity) for c in parsed.cards],
+                         [("OP12-089", 2), ("OP12-009", 1)])
+
+    def test_bare_don_header_drops_its_lines_until_the_next_section(self):
+        parsed = parse_card_list("DON!!\n10 DON card DON-001\nCharacter\n1 A OP12-001\n")
+        self.assertEqual([c.base_card_id for c in parsed.cards], ["OP12-001"])
+        self.assertEqual(parsed.warnings, [])

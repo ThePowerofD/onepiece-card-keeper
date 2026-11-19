@@ -177,3 +177,58 @@ def parse_decklist(text: str) -> ParsedDeck:
         warnings.append("no leader found in decklist")
 
     return ParsedDeck(leader_id, [totals[cid] for cid in order], warnings)
+
+
+class ParsedCardList(NamedTuple):
+    cards: list[DeckCard]
+    warnings: list[str]
+
+
+def parse_card_list(text: str) -> ParsedCardList:
+    """Parse a plain list of cards - a batch for a binder or box. Never raises.
+
+    The same line format as a decklist, but nothing is a leader: a 'Leader'
+    section's card is just another card, and no leader is expected. DON!! lines
+    are dropped as in a decklist. Section headers are optional. Duplicate ids
+    across lines are summed into one entry, in first-seen order.
+    """
+    order: list[str] = []
+    totals: dict[str, DeckCard] = {}
+    warnings: list[str] = []
+    section: str | None = None
+
+    for lineno, raw_line in enumerate(text.splitlines(), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        header, remainder = split_header(line)
+        if header is not None:
+            if header in DON_HEADERS:
+                if not remainder:
+                    section = header
+                continue
+            section = header
+            if not remainder:
+                continue
+            body = remainder
+        else:
+            if section in DON_HEADERS:
+                continue
+            body = line
+
+        card, reason = parse_card_line(body)
+        if card is None:
+            warnings.append(f"line {lineno}: {reason} - {line!r}")
+            continue
+
+        existing = totals.get(card.base_card_id)
+        if existing is None:
+            order.append(card.base_card_id)
+            totals[card.base_card_id] = card
+        else:
+            totals[card.base_card_id] = existing._replace(
+                quantity=existing.quantity + card.quantity
+            )
+
+    return ParsedCardList([totals[cid] for cid in order], warnings)
