@@ -166,6 +166,37 @@ def choose_card(conn: sqlite3.Connection, text: str) -> str | None:
         print(f"  type a number from 1 to {len(matches)}, or c")
 
 
+def cmd_web(conn: sqlite3.Connection, args) -> int:
+    """Start the browser page on this computer only (PHASE_2 M1)."""
+    try:
+        import uvicorn
+
+        from optcg.web.api import UI_DIST, create_app
+    except ImportError:
+        print("error: the web parts aren't installed - run `pip install -e .` in the venv",
+              file=sys.stderr)
+        return 1
+    conn.close()  # the server opens its own connection per request
+    url = f"http://127.0.0.1:{args.port}/"
+    print(f"Card Keeper is running at {url}")
+    print("  only this computer can open it. Press Ctrl+C here to stop it.")
+    if not UI_DIST.is_dir():
+        print("  the page isn't built yet: in the ui folder run `npm install` then "
+              "`npm run build`. The API works meanwhile, at /api/docs.")
+    if not args.no_browser:
+        import threading
+        import webbrowser
+
+        threading.Timer(1.0, webbrowser.open, [url]).start()
+    try:
+        uvicorn.run(create_app(args.db), host="127.0.0.1", port=args.port, log_level="warning")
+    except OSError as exc:
+        print(f"error: could not start on port {args.port} ({exc}) - is it already running? "
+              f"Try --port 8001", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_find(conn: sqlite3.Connection, args) -> int:
     text = " ".join(args.text)
     exact = resolve.exact_card(conn, text)
@@ -1521,6 +1552,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("text", nargs="+", help="part of a card name, or an id")
     p.set_defaults(func=cmd_find)
 
+    # ---- web ------------------------------------------------------------
+    p = _command(
+        sub, "web", "open the browser page: your cards with pictures",
+        "web",
+        "web --port 8001",
+        description="Start Card Keeper's page on this computer and open it in your browser.\n"
+                    "It reads and writes the same database as these commands. Only this\n"
+                    "computer can reach it. Ctrl+C stops it.",
+    )
+    p.add_argument("--port", type=int, default=8000, help="default: 8000")
+    p.add_argument("--no-browser", action="store_true", help="don't open the browser")
+    p.set_defaults(func=cmd_web)
+
     # ---- setup and sync -------------------------------------------------
     p = _command(
         sub, "setup", "first-time setup: create the database and download every card",
@@ -1606,7 +1650,7 @@ def not_ready(conn: sqlite3.Connection, args) -> str | None:
     if not {"cards", "copies", "decks", "storage_locations"} <= tables:
         return "the database isn't set up yet - run `optcg setup` first"
     needs_cards = getattr(args, "base_card_id", None) or args.func in (
-        cmd_find, cmd_deck_import, cmd_deck_paste, cmd_browse, cmd_storage_import,
+        cmd_find, cmd_deck_import, cmd_deck_paste, cmd_browse, cmd_storage_import, cmd_web,
     )
     if needs_cards and conn.execute("SELECT 1 FROM cards LIMIT 1").fetchone() is None:
         return "no cards downloaded yet - run `optcg sync`"

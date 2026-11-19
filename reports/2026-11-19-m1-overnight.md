@@ -6,9 +6,10 @@ This file is updated after every step. The newest state is the
 
 ## Current status
 
-- **Last finished:** Step 2 setup: packages installed, Vite checked.
-- **Working on:** Step 2, the local server (`optcg web`) and its API.
-- **Tests:** 647 passing at the last commit.
+- **Last finished:** Step 2, the local server (`optcg web`), its API, the
+  frozen sample and the parity test.
+- **Working on:** Steps 3-5, the page itself (grid, card detail, record art).
+- **Tests:** 669 passing at the last commit, coverage 97% (the server: 100%).
 - **Your real database:** only read, never written. All write tests use a
   throwaway copy.
 
@@ -79,3 +80,32 @@ Node.js 26.13.1 itself was installed earlier with `winget` (you clicked Yes).
 - Installed the approved packages (table above), declared them in
   `pyproject.toml`, ignored `ui/node_modules/` and `ui/dist/` in git.
 - Minimal Vite page builds (`npx vite build`, 0.6 s).
+
+### Step 2: the local server (done, commit below)
+- **`optcg web`** starts the server on `127.0.0.1` (this PC only) and opens the
+  browser. `--port` if 8000 is taken, `--no-browser` to skip opening it.
+- **`optcg/web/api.py`**: no database code of its own; every answer comes from
+  the functions the CLI uses. Routes:
+  - `GET /api/summary` - copies, cards, places, catalog size
+  - `GET /api/cards` - the grid (filters + paging)
+  - `GET /api/cards/{id}` - one card: arts, where every copy is, every printing
+  - `GET /api/sets`, `GET /api/places`, `GET /api/places/contents?name=&kind=`
+  - `POST /api/copies/set-art` - record which art some copies in one place are
+  - `/api/docs` - an automatic page listing all of the above (FastAPI makes it)
+- Errors keep the CLI's own wording (400 + the message).
+- **Frozen sample** in `tests/fixtures/sample_2026-11-18/`:
+  - `collection.json` = your backup from 23:52, unchanged
+  - `cards.json` = the catalog rows for your 77 cards (183 printings)
+  - **`SAMPLE.md` = the page to check the screen against by eye**
+  - `tests/fixtures/make_sample.py` regenerates them (reads your DB read-only)
+- **Parity test** (`tests/test_web.py`): builds a throwaway database from the
+  sample and checks every place, every card and the totals three ways: the
+  sample file, the CLI's functions, and the API. Also a set-art round trip
+  (record an art via the API, read it back via the CLI's functions; totals
+  unchanged) and refusals (too many copies, unknown art, unknown place).
+- **Smoke test on your real database, read-only:** `/api/summary` answered
+  `172 copies, 77 cards, 5 places, 2797 catalog`. Matches.
+- One test was wrong at first (I guessed 9 OP12 cards; the Kid deck adds 3, so
+  11). Fixed by counting from the sample instead of guessing.
+- Note: the test client prints a deprecation warning suggesting a package
+  called `httpx2`. Harmless; **not installed** because it wasn't on your list.

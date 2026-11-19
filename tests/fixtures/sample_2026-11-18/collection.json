@@ -1,0 +1,884 @@
+{
+  "format": "optcg-collection",
+  "version": 1,
+  "exported_at": "2026-11-18T23:52:02",
+  "storage_types": [
+    "binder",
+    "booster-box",
+    "bulk"
+  ],
+  "locations": [
+    {
+      "name": "trading_binder",
+      "kind": "binder",
+      "notes": null,
+      "created_at": "2026-11-19 05:26:22",
+      "copies": [
+        {
+          "card": "OP12-006",
+          "art": null,
+          "quantity": 1,
+          "name": "Shakuyaku"
+        },
+        {
+          "card": "OP12-009",
+          "art": null,
+          "quantity": 1,
+          "name": "Jinbe"
+        },
+        {
+          "card": "OP12-053",
+          "art": null,
+          "quantity": 1,
+          "name": "Borsalino"
+        },
+        {
+          "card": "OP12-063",
+          "art": null,
+          "quantity": 1,
+          "name": "Vinsmoke Reiju"
+        },
+        {
+          "card": "OP12-089",
+          "art": null,
+          "quantity": 2,
+          "name": "Hack"
+        },
+        {
+          "card": "OP12-099",
+          "art": null,
+          "quantity": 1,
+          "name": "Kalgara"
+        },
+        {
+          "card": "OP12-102",
+          "art": null,
+          "quantity": 1,
+          "name": "Shirahoshi"
+        },
+        {
+          "card": "OP12-107",
+          "art": null,
+          "quantity": 3,
+          "name": "Donquixote Doflamingo"
+        }
+      ]
+    },
+    {
+      "name": "just-loose",
+      "kind": "loose",
+      "notes": "built-in: copies with no container named",
+      "created_at": "2026-09-16 04:56:13",
+      "copies": [
+        {
+          "card": "EB01-058",
+          "art": null,
+          "quantity": 1,
+          "name": "Mont Blanc Cricket"
+        },
+        {
+          "card": "OP03-116",
+          "art": null,
+          "quantity": 1,
+          "name": "Shirahoshi"
+        },
+        {
+          "card": "OP05-110",
+          "art": null,
+          "quantity": 1,
+          "name": "Holly"
+        },
+        {
+          "card": "OP08-111",
+          "art": null,
+          "quantity": 1,
+          "name": "S-Shark"
+        },
+        {
+          "card": "OP09-105",
+          "art": null,
+          "quantity": 3,
+          "name": "Sanji (105)"
+        },
+        {
+          "card": "OP11-075",
+          "art": null,
+          "quantity": 1,
+          "name": "Jaguar.D.Saul"
+        }
+      ]
+    }
+  ],
+  "decks": [
+    {
+      "name": "Reiju",
+      "leader": "OP06-042",
+      "physical": true,
+      "notes": null,
+      "created_at": "2026-10-29 06:03:47",
+      "recipe": [
+        {
+          "card": "OP06-042",
+          "quantity": 1,
+          "name": "Vinsmoke Reiju (042)"
+        },
+        {
+          "card": "ST03-008",
+          "quantity": 2,
+          "name": "Trafalgar Law"
+        },
+        {
+          "card": "OP06-060",
+          "quantity": 4,
+          "name": "Vinsmoke Ichiji (060)"
+        },
+        {
+          "card": "OP06-061",
+          "quantity": 4,
+          "name": "Vinsmoke Ichiji (061)"
+        },
+        {
+          "card": "OP06-066",
+          "quantity": 4,
+          "name": "Vinsmoke Yonji (066)"
+        },
+        {
+          "card": "OP06-067",
+          "quantity": 4,
+          "name": "Vinsmoke Yonji (067)"
+        },
+        {
+          "card": "OP06-069",
+          "quantity": 3,
+          "name": "Vinsmoke Reiju (069)"
+        },
+        {
+          "card": "OP06-068",
+          "quantity": 3,
+          "name": "Vinsmoke Reiju (068)"
+        },
+        {
+          "card": "OP06-064",
+          "quantity": 4,
+          "name": "Vinsmoke Niji (064)"
+        },
+        {
+          "card": "OP06-065",
+          "quantity": 4,
+          "name": "Vinsmoke Niji (065)"
+        },
+        {
+          "card": "OP06-063",
+          "quantity": 3,
+          "name": "Vinsmoke Sora"
+        },
+        {
+          "card": "OP06-062",
+          "quantity": 1,
+          "name": "Vinsmoke Judge"
+        },
+        {
+          "card": "OP06-072",
+          "quantity": 4,
+          "name": "Cosette"
+        },
+        {
+          "card": "OP06-078",
+          "quantity": 2,
+          "name": "GERMA 66"
+        },
+        {
+          "card": "EB02-039",
+          "quantity": 1,
+          "name": "GERMA 66"
+        },
+        {
+          "card": "OP03-055",
+          "quantity": 1,
+          "name": "Gum-Gum Giant Gavel"
+        },
+        {
+          "card": "OP06-077",
+          "quantity": 2,
+          "name": "Black Bug"
+        },
+        {
+          "card": "OP06-079",
+          "quantity": 4,
+          "name": "Kingdom of GERMA"
+        }
+      ],
+      "copies": [
+        {
+          "card": "EB02-039",
+          "art": null,
+          "quantity": 1,
+          "name": "GERMA 66"
+        },
+        {
+          "card": "OP03-055",
+          "art": null,
+          "quantity": 1,
+          "name": "Gum-Gum Giant Gavel"
+        },
+        {
+          "card": "OP06-042",
+          "art": null,
+          "quantity": 1,
+          "name": "Vinsmoke Reiju (042)"
+        },
+        {
+          "card": "OP06-060",
+          "art": null,
+          "quantity": 4,
+          "name": "Vinsmoke Ichiji (060)"
+        },
+        {
+          "card": "OP06-061",
+          "art": null,
+          "quantity": 4,
+          "name": "Vinsmoke Ichiji (061)"
+        },
+        {
+          "card": "OP06-062",
+          "art": null,
+          "quantity": 1,
+          "name": "Vinsmoke Judge"
+        },
+        {
+          "card": "OP06-063",
+          "art": null,
+          "quantity": 3,
+          "name": "Vinsmoke Sora"
+        },
+        {
+          "card": "OP06-064",
+          "art": null,
+          "quantity": 4,
+          "name": "Vinsmoke Niji (064)"
+        },
+        {
+          "card": "OP06-065",
+          "art": null,
+          "quantity": 4,
+          "name": "Vinsmoke Niji (065)"
+        },
+        {
+          "card": "OP06-066",
+          "art": null,
+          "quantity": 4,
+          "name": "Vinsmoke Yonji (066)"
+        },
+        {
+          "card": "OP06-067",
+          "art": null,
+          "quantity": 4,
+          "name": "Vinsmoke Yonji (067)"
+        },
+        {
+          "card": "OP06-068",
+          "art": null,
+          "quantity": 3,
+          "name": "Vinsmoke Reiju (068)"
+        },
+        {
+          "card": "OP06-069",
+          "art": null,
+          "quantity": 3,
+          "name": "Vinsmoke Reiju (069)"
+        },
+        {
+          "card": "OP06-072",
+          "art": null,
+          "quantity": 4,
+          "name": "Cosette"
+        },
+        {
+          "card": "OP06-077",
+          "art": null,
+          "quantity": 2,
+          "name": "Black Bug"
+        },
+        {
+          "card": "OP06-078",
+          "art": null,
+          "quantity": 2,
+          "name": "GERMA 66"
+        },
+        {
+          "card": "OP06-079",
+          "art": null,
+          "quantity": 4,
+          "name": "Kingdom of GERMA"
+        },
+        {
+          "card": "ST03-008",
+          "art": null,
+          "quantity": 2,
+          "name": "Trafalgar Law"
+        }
+      ]
+    },
+    {
+      "name": "Nico Robin YP",
+      "leader": "OP09-062",
+      "physical": true,
+      "notes": null,
+      "created_at": "2026-11-19 05:08:31",
+      "recipe": [
+        {
+          "card": "OP09-062",
+          "quantity": 1,
+          "name": "Nico Robin (062)"
+        },
+        {
+          "card": "ST04-005",
+          "quantity": 1,
+          "name": "Queen"
+        },
+        {
+          "card": "OP09-107",
+          "quantity": 4,
+          "name": "Nico Robin (107)"
+        },
+        {
+          "card": "OP09-102",
+          "quantity": 2,
+          "name": "Professor Clover"
+        },
+        {
+          "card": "OP09-106",
+          "quantity": 4,
+          "name": "Nico Olvia"
+        },
+        {
+          "card": "OP09-101",
+          "quantity": 2,
+          "name": "Kuzan"
+        },
+        {
+          "card": "OP06-110",
+          "quantity": 2,
+          "name": "Nekomamushi"
+        },
+        {
+          "card": "OP09-071",
+          "quantity": 2,
+          "name": "Nico Robin (071)"
+        },
+        {
+          "card": "OP09-113",
+          "quantity": 2,
+          "name": "Morley"
+        },
+        {
+          "card": "OP09-105",
+          "quantity": 1,
+          "name": "Sanji (105)"
+        },
+        {
+          "card": "OP03-060",
+          "quantity": 2,
+          "name": "Kalifa (060)"
+        },
+        {
+          "card": "OP09-109",
+          "quantity": 4,
+          "name": "Jaguar.D.Saul"
+        },
+        {
+          "card": "OP11-075",
+          "quantity": 3,
+          "name": "Jaguar.D.Saul"
+        },
+        {
+          "card": "OP05-073",
+          "quantity": 2,
+          "name": "Miss Doublefinger(Zala)"
+        },
+        {
+          "card": "OP09-070",
+          "quantity": 1,
+          "name": "Nami (070)"
+        },
+        {
+          "card": "OP10-100",
+          "quantity": 3,
+          "name": "Inazuma"
+        },
+        {
+          "card": "OP09-063",
+          "quantity": 1,
+          "name": "Usopp (063)"
+        },
+        {
+          "card": "OP08-111",
+          "quantity": 1,
+          "name": "S-Shark"
+        },
+        {
+          "card": "OP09-066",
+          "quantity": 1,
+          "name": "Jean Bart"
+        },
+        {
+          "card": "OP09-079",
+          "quantity": 1,
+          "name": "Gum-Gum Jump Rope"
+        },
+        {
+          "card": "OP05-114",
+          "quantity": 2,
+          "name": "El Thor"
+        },
+        {
+          "card": "OP09-115",
+          "quantity": 2,
+          "name": "Ice Block Partisan"
+        },
+        {
+          "card": "OP09-117",
+          "quantity": 2,
+          "name": "Dereshi!"
+        },
+        {
+          "card": "OP03-121",
+          "quantity": 1,
+          "name": "Thunder Bolt"
+        },
+        {
+          "card": "OP09-116",
+          "quantity": 1,
+          "name": "Never Underestimate the Power of Miracles!!"
+        },
+        {
+          "card": "ST09-014",
+          "quantity": 2,
+          "name": "Narikabura Arrow"
+        },
+        {
+          "card": "ST04-016",
+          "quantity": 1,
+          "name": "Blast Breath"
+        }
+      ],
+      "copies": [
+        {
+          "card": "OP03-060",
+          "art": null,
+          "quantity": 2,
+          "name": "Kalifa (060)"
+        },
+        {
+          "card": "OP03-121",
+          "art": null,
+          "quantity": 1,
+          "name": "Thunder Bolt"
+        },
+        {
+          "card": "OP05-073",
+          "art": null,
+          "quantity": 2,
+          "name": "Miss Doublefinger(Zala)"
+        },
+        {
+          "card": "OP05-114",
+          "art": null,
+          "quantity": 2,
+          "name": "El Thor"
+        },
+        {
+          "card": "OP06-110",
+          "art": null,
+          "quantity": 2,
+          "name": "Nekomamushi"
+        },
+        {
+          "card": "OP08-111",
+          "art": null,
+          "quantity": 1,
+          "name": "S-Shark"
+        },
+        {
+          "card": "OP09-062",
+          "art": null,
+          "quantity": 1,
+          "name": "Nico Robin (062)"
+        },
+        {
+          "card": "OP09-063",
+          "art": null,
+          "quantity": 1,
+          "name": "Usopp (063)"
+        },
+        {
+          "card": "OP09-066",
+          "art": null,
+          "quantity": 1,
+          "name": "Jean Bart"
+        },
+        {
+          "card": "OP09-070",
+          "art": null,
+          "quantity": 1,
+          "name": "Nami (070)"
+        },
+        {
+          "card": "OP09-071",
+          "art": null,
+          "quantity": 2,
+          "name": "Nico Robin (071)"
+        },
+        {
+          "card": "OP09-079",
+          "art": null,
+          "quantity": 1,
+          "name": "Gum-Gum Jump Rope"
+        },
+        {
+          "card": "OP09-101",
+          "art": null,
+          "quantity": 2,
+          "name": "Kuzan"
+        },
+        {
+          "card": "OP09-102",
+          "art": null,
+          "quantity": 2,
+          "name": "Professor Clover"
+        },
+        {
+          "card": "OP09-105",
+          "art": null,
+          "quantity": 1,
+          "name": "Sanji (105)"
+        },
+        {
+          "card": "OP09-106",
+          "art": null,
+          "quantity": 4,
+          "name": "Nico Olvia"
+        },
+        {
+          "card": "OP09-107",
+          "art": null,
+          "quantity": 4,
+          "name": "Nico Robin (107)"
+        },
+        {
+          "card": "OP09-109",
+          "art": null,
+          "quantity": 4,
+          "name": "Jaguar.D.Saul"
+        },
+        {
+          "card": "OP09-113",
+          "art": null,
+          "quantity": 2,
+          "name": "Morley"
+        },
+        {
+          "card": "OP09-115",
+          "art": null,
+          "quantity": 2,
+          "name": "Ice Block Partisan"
+        },
+        {
+          "card": "OP09-116",
+          "art": null,
+          "quantity": 1,
+          "name": "Never Underestimate the Power of Miracles!!"
+        },
+        {
+          "card": "OP09-117",
+          "art": null,
+          "quantity": 2,
+          "name": "Dereshi!"
+        },
+        {
+          "card": "OP10-100",
+          "art": null,
+          "quantity": 3,
+          "name": "Inazuma"
+        },
+        {
+          "card": "OP11-075",
+          "art": null,
+          "quantity": 3,
+          "name": "Jaguar.D.Saul"
+        },
+        {
+          "card": "ST04-005",
+          "art": null,
+          "quantity": 1,
+          "name": "Queen"
+        },
+        {
+          "card": "ST04-016",
+          "art": null,
+          "quantity": 1,
+          "name": "Blast Breath"
+        },
+        {
+          "card": "ST09-014",
+          "art": null,
+          "quantity": 2,
+          "name": "Narikabura Arrow"
+        }
+      ]
+    },
+    {
+      "name": "Eustass Kid Y",
+      "leader": "OP10-099",
+      "physical": true,
+      "notes": null,
+      "created_at": "2026-11-19 05:20:42",
+      "recipe": [
+        {
+          "card": "OP10-099",
+          "quantity": 1,
+          "name": "Eustass\"Captain\"Kid (099)"
+        },
+        {
+          "card": "OP12-113",
+          "quantity": 1,
+          "name": "Roronoa Zoro (113)"
+        },
+        {
+          "card": "OP06-099",
+          "quantity": 1,
+          "name": "Aisa"
+        },
+        {
+          "card": "OP10-104",
+          "quantity": 2,
+          "name": "Caribou"
+        },
+        {
+          "card": "OP10-109",
+          "quantity": 4,
+          "name": "Basil Hawkins"
+        },
+        {
+          "card": "OP10-114",
+          "quantity": 2,
+          "name": "X.Drake"
+        },
+        {
+          "card": "OP10-111",
+          "quantity": 3,
+          "name": "Monkey.D.Luffy (111)"
+        },
+        {
+          "card": "OP10-106",
+          "quantity": 2,
+          "name": "Killer"
+        },
+        {
+          "card": "OP10-112",
+          "quantity": 4,
+          "name": "Eustass\"Captain\"Kid (112)"
+        },
+        {
+          "card": "OP10-107",
+          "quantity": 3,
+          "name": "Jewelry Bonney"
+        },
+        {
+          "card": "OP10-108",
+          "quantity": 4,
+          "name": "Scratchmen Apoo"
+        },
+        {
+          "card": "OP10-110",
+          "quantity": 3,
+          "name": "Heat & Wire"
+        },
+        {
+          "card": "OP11-101",
+          "quantity": 4,
+          "name": "Capone\"Gang\"Bege (101)"
+        },
+        {
+          "card": "OP10-103",
+          "quantity": 2,
+          "name": "Capone\"Gang\"Bege"
+        },
+        {
+          "card": "OP10-101",
+          "quantity": 2,
+          "name": "Urouge"
+        },
+        {
+          "card": "OP12-119",
+          "quantity": 2,
+          "name": "Bartholomew Kuma"
+        },
+        {
+          "card": "OP10-117",
+          "quantity": 1,
+          "name": "ROOM"
+        },
+        {
+          "card": "OP04-116",
+          "quantity": 1,
+          "name": "Diable Jambe Joue Shot"
+        },
+        {
+          "card": "OP10-115",
+          "quantity": 4,
+          "name": "Let's Meet Again in the New World"
+        },
+        {
+          "card": "OP10-116",
+          "quantity": 2,
+          "name": "Damned Punk"
+        },
+        {
+          "card": "ST09-014",
+          "quantity": 2,
+          "name": "Narikabura Arrow"
+        },
+        {
+          "card": "OP12-117",
+          "quantity": 1,
+          "name": "Slam Gibson"
+        }
+      ],
+      "copies": [
+        {
+          "card": "OP04-116",
+          "art": null,
+          "quantity": 1,
+          "name": "Diable Jambe Joue Shot"
+        },
+        {
+          "card": "OP06-099",
+          "art": null,
+          "quantity": 1,
+          "name": "Aisa"
+        },
+        {
+          "card": "OP10-099",
+          "art": null,
+          "quantity": 1,
+          "name": "Eustass\"Captain\"Kid (099)"
+        },
+        {
+          "card": "OP10-101",
+          "art": null,
+          "quantity": 2,
+          "name": "Urouge"
+        },
+        {
+          "card": "OP10-103",
+          "art": null,
+          "quantity": 2,
+          "name": "Capone\"Gang\"Bege"
+        },
+        {
+          "card": "OP10-104",
+          "art": null,
+          "quantity": 2,
+          "name": "Caribou"
+        },
+        {
+          "card": "OP10-106",
+          "art": null,
+          "quantity": 2,
+          "name": "Killer"
+        },
+        {
+          "card": "OP10-107",
+          "art": null,
+          "quantity": 3,
+          "name": "Jewelry Bonney"
+        },
+        {
+          "card": "OP10-108",
+          "art": null,
+          "quantity": 4,
+          "name": "Scratchmen Apoo"
+        },
+        {
+          "card": "OP10-109",
+          "art": null,
+          "quantity": 4,
+          "name": "Basil Hawkins"
+        },
+        {
+          "card": "OP10-110",
+          "art": null,
+          "quantity": 3,
+          "name": "Heat & Wire"
+        },
+        {
+          "card": "OP10-111",
+          "art": null,
+          "quantity": 3,
+          "name": "Monkey.D.Luffy (111)"
+        },
+        {
+          "card": "OP10-112",
+          "art": null,
+          "quantity": 4,
+          "name": "Eustass\"Captain\"Kid (112)"
+        },
+        {
+          "card": "OP10-114",
+          "art": null,
+          "quantity": 2,
+          "name": "X.Drake"
+        },
+        {
+          "card": "OP10-115",
+          "art": null,
+          "quantity": 4,
+          "name": "Let's Meet Again in the New World"
+        },
+        {
+          "card": "OP10-116",
+          "art": null,
+          "quantity": 2,
+          "name": "Damned Punk"
+        },
+        {
+          "card": "OP10-117",
+          "art": null,
+          "quantity": 1,
+          "name": "ROOM"
+        },
+        {
+          "card": "OP11-101",
+          "art": null,
+          "quantity": 4,
+          "name": "Capone\"Gang\"Bege (101)"
+        },
+        {
+          "card": "OP12-113",
+          "art": null,
+          "quantity": 1,
+          "name": "Roronoa Zoro (113)"
+        },
+        {
+          "card": "OP12-117",
+          "art": null,
+          "quantity": 1,
+          "name": "Slam Gibson"
+        },
+        {
+          "card": "OP12-119",
+          "art": null,
+          "quantity": 2,
+          "name": "Bartholomew Kuma"
+        },
+        {
+          "card": "ST09-014",
+          "art": null,
+          "quantity": 2,
+          "name": "Narikabura Arrow"
+        }
+      ]
+    }
+  ]
+}
