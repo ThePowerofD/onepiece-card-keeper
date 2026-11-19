@@ -15,8 +15,9 @@ written; every write was tested on a throwaway copy.
 Work stopped after M4 on purpose: PHASE_2 says Phase 3 features should be
 chosen from using the app, and it hasn't been used yet.
 
-**Not verified:** how the page *looks* - it was never opened in a browser
-window (no browser tool was connected). Every behaviour behind it is tested.
+**Browser check (2026-11-19, later):** the page was opened in Chrome on a
+throwaway copy of the database and clicked through - see the last log entry.
+Everything worked; no console errors.
 
 ## To review, in order
 
@@ -244,3 +245,29 @@ paste → Preview → Import. Same result as `optcg deck import`.
   (D-003); with Set art on the detail it's one extra step instead of a wrong
   record.
 - 6 new server tests (691 total; server code 100% covered).
+
+### Browser check in Chrome (done)
+Opened `optcg web` in Chrome (Claude in Chrome extension, publisher
+Anthropic) on a **throwaway copy** of the database, port 8770. Clicked
+through every screen:
+
+| Checked | Result |
+|---|---|
+| Grid | 172 copies · 77 cards · 5 places; pictures load; dark mode follows Windows |
+| Search "nico robin" | 3 cards, as expected |
+| Card detail OP09-107 | both arts side by side; "4× unsorted in Nico Robin YP (deck)" |
+| Set art: 2 of 4 -> p1 | pile split 2 unsorted + 2 p1; total still 4 |
+| Same card in the terminal | `optcg collection show OP09-107` on the test copy showed the same split |
+| Places tab | identical to SAMPLE.md: binder 8/11, loose 6/8, decks 22/27/18 cards at 51 |
+| trading_binder contents | the 8 cards and 11 copies of SAMPLE.md |
+| Decks tab, Preview | "nothing saved", flagged the bad line and the short deck; list unchanged |
+| Import with a taken name ("Reiju") | asked: *second deck* or *replace* - left unanswered |
+| Add cards, +1 on Holly OP15-071 | 173 copies, 78 cards, "Added 1 Holly to just-loose", Undo shown |
+| Undo | back to 172 / 77, Holly "not owned" |
+| Browser console | no errors |
+
+Afterwards the tab was closed, the test server stopped, and the **real**
+database checked: 2 places, 3 decks, 172 copies, 0 arts - unchanged.
+
+Still the owner's: looking at it on the real data, and recording a real alt art
+(M1's last box).
