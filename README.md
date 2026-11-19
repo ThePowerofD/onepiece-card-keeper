@@ -240,6 +240,9 @@ In PowerShell, type `npm.cmd` instead of `npm` if Windows says running scripts
 is disabled. While changing the page's code, `optcg web --no-browser` plus
 `npm run dev` (in `ui/`) reloads the page on every save.
 
+To enter cards fast, press **Add cards** on the Cards tab, choose where they
+go, and press **+1** on a card for each copy (Undo takes back the last one).
+
 The page has three tabs: **Cards** (the grid), **Places** (every place, with
 a form to add one) and **Decks** (your decks, owned vs missing, and *Import a
 decklist* - paste, Preview, Import). On a card, each pile can be given its

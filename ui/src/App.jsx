@@ -51,7 +51,7 @@ export default function App() {
       )}
 
       <main>
-        {tab === "cards" && <CardsView version={version} onOpen={setOpenCard} />}
+        {tab === "cards" && <CardsView version={version} onOpen={setOpenCard} onChanged={changed} />}
         {tab === "places" && <PlacesView version={version} onOpen={setOpenCard} onChanged={changed} />}
         {tab === "decks" && <DecksView version={version} onOpen={setOpenCard} onChanged={changed} />}
       </main>

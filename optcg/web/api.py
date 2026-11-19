@@ -69,6 +69,15 @@ class MoveRequest(BaseModel):
     art: str | None = Field(default=None, description="which pile; none = the unsorted copies")
 
 
+class CopiesRequest(BaseModel):
+    """Copies arriving in (or, for undo, leaving) one place - M4."""
+    card: str
+    quantity: int = Field(default=1, gt=0)
+    place: str | None = Field(default=None, description="none = just-loose")
+    kind: str | None = None
+    art: str | None = Field(default=None, description="none = unsorted")
+
+
 class DeckImportRequest(BaseModel):
     """Import a pasted decklist (decks.import_decklist) - M3."""
     text: str
@@ -274,6 +283,25 @@ def create_app(db_path: Path) -> FastAPI:
         to = store.resolve_container(conn, body.to_place, body.to_kind)
         now_there = coll.move(conn, card, body.quantity, frm, to, body.art)
         return {"now_at_destination": now_there, "card": card_detail(conn, card)}
+
+    # ---- M4: fast entry ---------------------------------------------------
+
+    @app.post("/api/copies/add")
+    def post_add(body: CopiesRequest, conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+        """New copies you now own (`collection add`), into one place."""
+        card = body.card.strip().upper()
+        to = store.resolve_container(conn, body.place, body.kind)
+        total = coll.add(conn, card, body.quantity, body.art, to)
+        return {"card": card, "total_owned": total, "place": to.name, "kind": to.kind}
+
+    @app.post("/api/copies/remove")
+    def post_remove(body: CopiesRequest, conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+        """Copies leaving the collection (`collection remove`). The page uses it
+        only to undo an add it just made, from the same place."""
+        card = body.card.strip().upper()
+        frm = store.resolve_container(conn, body.place, body.kind)
+        total = coll.remove(conn, card, body.quantity, body.art, frm)
+        return {"card": card, "total_owned": total, "place": frm.name, "kind": frm.kind}
 
     # ---- M3: decks -------------------------------------------------------
 

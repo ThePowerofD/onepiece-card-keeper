@@ -19,7 +19,7 @@ Depends on Phase 1. Model and schema: [DESIGN.md](DESIGN.md).
 | M1 Card browser + record the art | **Built** (branch `m1-browser`, D-045); owner's look + first real art pending |
 | M2 Locations | **Built** in the browser (branch `m1-browser`, D-046): new place, move copies |
 | M3 Decks & completion | **Built** (branch `m1-browser`, D-046): list, owned vs missing, paste with preview; building from a wishlist still to do |
-| M4 Fast loose-card entry | |
+| M4 Fast loose-card entry | **Built** (branch `m1-browser`, D-047): +1 from the grid into a chosen place, Undo; no -1 yet |
 
 **The starting position (2026-11-19):** 4,712 printings synced, 639 tests
 passing, and a real sample of 172 copies in 3 decks, a binder and just-loose.

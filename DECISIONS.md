@@ -1583,3 +1583,24 @@ design question. The CLI covers all of these meanwhile.
 **Moves keep the deck rule.** Moving copies out of or into a physical deck
 changes its list by the same amount (D-041), exactly as `collection move`
 does; the page says so before saving.
+
+---
+
+## D-047 — Fast entry is +1 with Undo; no -1 on the grid yet
+
+**2026-11-19** · *Built overnight on branch `m1-browser`; waits for the
+owner's review.*
+
+PHASE_2 M4 asked for `+1` / `-1` straight from the grid. **Only `+1` was
+built**, plus **Undo** of the last add. A `-1` on every tile puts "this copy
+leaves your collection" one stray click away, with no history to recover it
+(`collection remove` keeps none, by the owner's choice). Undo covers the
+common mistake - one press too many - and selling or trading stays a
+deliberate `collection remove`. Adding `-1` later is small if the owner wants
+it.
+
+`+1` adds one **unsorted** copy to the place chosen in the bar (just-loose by
+default). The art is recorded afterwards on the card's detail - the same path
+as every imported copy, so there is one way to say which art you have, not
+two. This is the D-003 risk PHASE_2 M4 names (crediting the wrong art); it is
+met by never guessing an art rather than by a picker on the grid.

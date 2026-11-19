@@ -8,13 +8,14 @@ This file is updated after every step. The newest state is the
 
 - **Last finished:** Steps 3-5, the page: grid, card detail, record the art,
   and a Places tab. **M1's code is complete; it needs your eyes.**
-- **Beyond M1, also built:** M2 (new places, moving cards) and M3 (decks:
-  list, owned vs missing, paste a decklist with preview). See the log.
+- **Beyond M1, also built:** M2 (new places, moving cards), M3 (decks:
+  list, owned vs missing, paste a decklist with preview) and M4 (fast entry:
+  +1 from the grid, with Undo). See the log.
 - **Working on:** see the last log entry.
 - **Docs:** README has a "The browser page (M1)" section; PHASE_2 marks M1
   built; my own choices are written up as **D-045** in DECISIONS.md for you to
   review.
-- **Tests:** 685 passing at the last commit.
+- **Tests:** 691 passing at the last commit, coverage 97% (the server: 100%).
 - **Your real database:** only read, never written. All write tests use a
   throwaway copy.
 
@@ -206,3 +207,21 @@ copies, 0 arts.
 
 **This is how you could add your remaining decks:** Decks tab → Import a
 decklist → paste → Preview → Import. Same result as `optcg deck import`.
+
+### Beyond M1: M4 fast entry (done, commit below)
+- **Cards tab → "Add cards"**: a bar appears - *New cards go to: [place]*.
+  "Only cards I own" switches off (new cards are mostly ones you don't own).
+  Every tile gets a red **+1** button: one press = one copy, unsorted, into
+  that place (`collection add`). The bar says what was added and how many you
+  own now, with an **Undo** for that last add. **Done adding** closes it.
+- Server: `POST /api/copies/add`, and `POST /api/copies/remove` which the
+  page uses **only for Undo** (from the same place it just added to).
+- **No -1 button on purpose** (the plan had +1/-1). A -1 on every tile would
+  make removing cards from your collection one stray click away, and removing
+  copies is the kind of thing you told me not to do tonight. Undo covers
+  mistakes; selling or trading a card is still `collection remove`. Decide in
+  D-047 whether you want a -1.
+- Art isn't picked on +1: copies land unsorted and you set the art on the
+  card's detail, the same as imported decks. PHASE_2 warned about this (D-003);
+  with Set art on the detail it's one extra step instead of a wrong record.
+- 6 new server tests (691 total; server code 100% covered).

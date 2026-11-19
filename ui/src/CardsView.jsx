@@ -6,9 +6,43 @@ const PAGE = 60;
 const COLORS = ["Red", "Green", "Blue", "Purple", "Black", "Yellow"];
 const CATEGORIES = ["Leader", "Character", "Event", "Stage"];
 
+// "Add cards" mode (M4): pick where new cards go, then +1 on any tile adds one
+// unsorted copy there (`collection add`). The last add can be undone. The art
+// is set afterwards on the card's detail, like every imported copy.
+function AddBar({ places, target, setTarget, last, onUndo, busy, error }) {
+  return (
+    <div className="add-bar" role="region" aria-label="adding cards">
+      <label>
+        New cards go to:{" "}
+        <select value={target} onChange={(e) => setTarget(e.target.value)} aria-label="where new cards go">
+          {places.map((p) => (
+            <option key={`${p.kind}|${p.name}`} value={`${p.kind}|${p.name}`}>
+              {p.name} ({p.kind})
+            </option>
+          ))}
+        </select>
+      </label>
+      <span className="muted">Press +1 on a card for each copy you have.</span>
+      {last && (
+        <span className="last-add">
+          Added 1 {last.name} to {last.place} - you own {last.total} now.{" "}
+          <button className="small" disabled={busy} onClick={onUndo}>Undo</button>
+        </span>
+      )}
+      {error && <p className="error" role="alert">{error}</p>}
+    </div>
+  );
+}
+
 // The grid: one tile per card (not per art - the arts are on the detail).
 // Starts on "only cards I own", which is the collection.
-export default function CardsView({ version, onOpen }) {
+export default function CardsView({ version, onOpen, onChanged }) {
+  const [adding, setAdding] = useState(false);
+  const [places, setPlaces] = useState([]);
+  const [target, setTarget] = useState("loose|just-loose");
+  const [last, setLast] = useState(null); // the add that Undo would take back
+  const [busy, setBusy] = useState(false);
+  const [addError, setAddError] = useState(null);
   const [sets, setSets] = useState([]);
   const [filters, setFilters] = useState({
     q: "", set: "", color: "", category: "", owned_only: true,
@@ -42,6 +76,50 @@ export default function CardsView({ version, onOpen }) {
   function update(key, value) {
     setFilters((f) => (f[key] === value ? f : { ...f, [key]: value }));
     setOffset(0);
+  }
+
+  function startAdding() {
+    setAdding(true);
+    setLast(null);
+    setAddError(null);
+    update("owned_only", false); // new cards are mostly ones you don't own yet
+    api.places()
+      .then((all) => setPlaces(all.filter((p) => p.holds_copies)))
+      .catch((e) => setAddError(e.message));
+  }
+
+  function where() {
+    const [kind, ...rest] = target.split("|");
+    return { place: rest.join("|"), kind };
+  }
+
+  async function plusOne(card) {
+    setBusy(true);
+    setAddError(null);
+    try {
+      const r = await api.add({ card: card.base_card_id, quantity: 1, ...where() });
+      setLast({ card: card.base_card_id, name: card.name, place: r.place, kind: r.kind,
+                total: r.total_owned });
+      onChanged();
+    } catch (e) {
+      setAddError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function undo() {
+    setBusy(true);
+    setAddError(null);
+    try {
+      await api.remove({ card: last.card, quantity: 1, place: last.place, kind: last.kind });
+      setLast(null);
+      onChanged();
+    } catch (e) {
+      setAddError(e.message);
+    } finally {
+      setBusy(false);
+    }
   }
 
   const shownTo = page ? Math.min(offset + PAGE, page.total) : 0;
@@ -79,7 +157,16 @@ export default function CardsView({ version, onOpen }) {
           />
           Only cards I own
         </label>
+        <button className={adding ? "small active" : "small"} aria-pressed={adding}
+                onClick={() => (adding ? setAdding(false) : startAdding())}>
+          {adding ? "Done adding" : "Add cards"}
+        </button>
       </div>
+
+      {adding && (
+        <AddBar places={places} target={target} setTarget={setTarget} last={last}
+                onUndo={undo} busy={busy} error={addError} />
+      )}
 
       {error && <p className="error" role="alert">{error}</p>}
 
@@ -112,6 +199,12 @@ export default function CardsView({ version, onOpen }) {
                     )}
                   </span>
                 </button>
+                {adding && (
+                  <button className="plus-one" disabled={busy} onClick={() => plusOne(card)}
+                          aria-label={`add one ${card.name}`}>
+                    +1
+                  </button>
+                )}
               </li>
             ))}
           </ul>

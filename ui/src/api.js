@@ -38,6 +38,9 @@ export const api = {
   storageTypes: () => request("/api/storage-types"),
   newPlace: (body) => post("/api/places", body),
   move: (body) => post("/api/copies/move", body),
+  // M4
+  add: (body) => post("/api/copies/add", body),
+  remove: (body) => post("/api/copies/remove", body), // used only to undo an add
   // M3
   decks: () => request("/api/decks"),
   deck: (id) => request(`/api/decks/${id}`),

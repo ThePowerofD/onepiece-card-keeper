@@ -350,6 +350,54 @@ class DeckTests(WebTestCase):
         self.assertEqual(response.status_code, 400)
 
 
+class FastEntryTests(WebTestCase):
+    """M4: +1 from the grid into a chosen place, and undo."""
+
+    def test_add_into_a_place_then_undo(self):
+        added = self.client.post("/api/copies/add", json={
+            "card": "OP05-110", "place": "trading_binder", "kind": "binder"})
+        self.assertEqual(added.status_code, 200, added.text)
+        self.assertEqual(added.json()["total_owned"], 2)  # 1 loose + 1 new
+        self.assertEqual(self.get("/api/summary")["copies"], 173)
+        rows = store.contents(self.conn, "trading_binder", kind="binder")
+        self.assertIn(("OP05-110", None, 1), [(r[0], r[1], r[3]) for r in rows])
+
+        undone = self.client.post("/api/copies/remove", json={
+            "card": "OP05-110", "place": "trading_binder", "kind": "binder"})
+        self.assertEqual(undone.status_code, 200, undone.text)
+        self.assertEqual(self.get("/api/summary")["copies"], 172)
+
+    def test_no_place_means_just_loose_and_case_doesnt_matter(self):
+        added = self.client.post("/api/copies/add", json={"card": "op09-107"})
+        self.assertEqual(added.status_code, 200, added.text)
+        self.assertEqual(added.json()["place"], "just-loose")
+
+    def test_add_with_an_art(self):
+        added = self.client.post("/api/copies/add", json={
+            "card": "OP09-107", "art": "p1", "place": "just-loose"})
+        self.assertEqual(added.status_code, 200, added.text)
+        arts = {a.card_image_id: a.quantity for a in coll.show(self.conn, "OP09-107").arts}
+        self.assertEqual(arts["OP09-107_p1"], 1)
+
+    def test_add_into_a_wishlist_is_refused(self):
+        self.client.post("/api/decks/import", json={
+            "text": DECKLIST, "name": "Want", "physical": False})
+        response = self.client.post("/api/copies/add", json={
+            "card": "OP09-107", "place": "Want", "kind": "deck"})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("wishlist", response.json()["detail"])
+
+    def test_undo_of_something_not_there_is_refused(self):
+        response = self.client.post("/api/copies/remove", json={
+            "card": "OP05-110", "place": "trading_binder", "kind": "binder"})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.get("/api/summary")["copies"], 172)
+
+    def test_unknown_card_is_refused(self):
+        response = self.client.post("/api/copies/add", json={"card": "XX99-999"})
+        self.assertEqual(response.status_code, 400)
+
+
 class WebCommandTests(unittest.TestCase):
     def test_starts_on_this_computer_only(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
