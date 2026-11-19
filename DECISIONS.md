@@ -1519,3 +1519,40 @@ point is that the owner can trace their own cards from one phase to the next,
 not trust that they came through. The parity test reads a copy of the real
 sample from `tests/fixtures/`: the repo is public and the owner is fine with
 their card list being in it; the database itself stays out of git.
+
+---
+
+## D-045 — How M1 was built: a tile per card, a Places tab, plain React
+
+**2026-11-19** · *Built overnight on branch `m1-browser` without the owner
+present (they asked for that). These choices are the builder's and wait for
+the owner's review - supersede any of them freely.*
+
+**The grid has one tile per gameplay card, not one per art.** PHASE_2 said to
+add pictures to `list_cards`, which lists every printing. But a copy whose art
+isn't recorded - all 172 today - belongs to the card, not to any printing, so
+a per-printing grid would show it under none of them or under the wrong one.
+`collection.card_page` gives a tile per card, pictured by its plain printing,
+with *owned* and *art recorded* counts; the arts are side by side on the card's
+detail. `list_cards` is unchanged and still backs `browse`.
+
+**A Places tab was added**, beyond the plan's grid/detail/record. It lists
+every place with its counts and opens one art by art - the screen equivalent
+of `storage list`, `deck list` and `storage show`. It's what lets the owner
+compare the page with `SAMPLE.md` place by place, which D-044 asks for.
+
+**Recording the art works on a pile**: the copies of one art in one place.
+*Set art* on an unsorted pile, *Change art* on a recorded one (`from_art`).
+There's no way back to *unsorted*: `set_art` refuses it, as in the CLI.
+
+**Plain JavaScript React, no TypeScript**, to keep the page readable for an
+owner learning Python. Exact versions are pinned (React 18.3.1, Vite 6.3.5).
+npm's offer to run esbuild's install script was declined: Vite works without
+it, so one less script runs. `ui/node_modules` and `ui/dist` stay out of git
+like the venv; `npm run build` regenerates the page.
+
+**The server is a second door to the same rules.** `optcg/web/api.py` holds no
+SQL; every route calls a function the CLI uses, and errors keep the CLI's
+wording. It binds to 127.0.0.1 only. The parity test (`tests/test_web.py`)
+checks every place, card and total of the frozen sample three ways - the sample
+file, the CLI's functions, the API - plus a set-art round trip.

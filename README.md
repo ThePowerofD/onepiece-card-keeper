@@ -110,7 +110,8 @@ touched.
 
 ## Where the project is right now
 
-**Last updated: 2026-11-18 — Phase 2, M0 under way: real cards are going in.**
+**Last updated: 2026-11-19 — Phase 2: M1 built (the browser page), waiting on
+the owner's first look.**
 
 The card database is built, and the CLI covers the whole loop: import decklists
 (Limitless or deckbuilder-export, from a file or pasted in), track what you own
@@ -120,10 +121,10 @@ by card, and see what's missing for a deck you want to build. It's one command,
 every error says what to type next (D-036 to D-042).
 
 **Real data has started.** Three real decks are in (Reiju, Nico Robin, Eustass
-Kid) and a trading binder: 164 copies, arts not yet sorted. A batch of new
+Kid), a trading binder and loose cards: 172 copies, arts not yet sorted. A batch of new
 cards for one place goes in with `storage import` (D-043). From here the
-database holds data that exists nowhere else, so it's protected now (D-032, D-034): destructive commands
-snapshot the database first and ask when something would be lost, imports take
+database holds data that exists nowhere else, so it's protected now (D-032,
+D-034): destructive commands snapshot the database first and ask when something would be lost, imports take
 `--dry-run`, and `backup export` writes a JSON copy that can be moved to
 another machine.
 
@@ -138,8 +139,8 @@ as UI instead of terminal tables. See **D-024** for the reasoning.
 | Unique gameplay cards (`base_card_id`) | 2,797 |
 | Sets covered | OP01–OP17, EB01–EB04, ST01–ST36, PRB01–02, promos |
 | Bad rows in logs | none |
-| Owned so far | 164 copies: 3 decks, 1 binder |
-| Tests | 639 passing |
+| Owned so far | 172 copies: 3 decks, 1 binder, 8 loose |
+| Tests | 670 passing |
 
 **Known limitation:** OptcgAPI lags the real game. It caught up to **OP17** by
 2026-10-29 (synced that day: 158 new OP17 printings, ST31–ST36, and three new
@@ -181,7 +182,7 @@ python -m pytest tests/ --cov=optcg --cov-report=term-missing   # coverage (97%)
   Stale printings:    0
 ```
 
-...and 639 passing tests. Anything else means something changed upstream —
+...and 670 passing tests. Anything else means something changed upstream —
 `Unknown sub_types` above 0 usually means a new set introduced a card type;
 add it to `SEED_TYPES` in `optcg/known_types.py` and re-sync. `Stale printings`
 above 0 means the API stopped sending some rows; they are kept, and if you own
@@ -212,6 +213,38 @@ optcg> exit
 
 Inside the shell, `help` shows a getting-started guide, and `help deck` or
 `help deck import` shows a group or a single command with examples.
+
+### The browser page (M1)
+
+`optcg web` starts the page on this computer and opens it in your browser:
+your cards with pictures, every art of a card, where each copy is, and
+recording which art your copies are. It reads and writes the same database as
+the commands - one file, one set of rules - so the page and the terminal
+always agree. Only this computer can open it; Ctrl+C in the terminal stops it.
+
+```text
+optcg web                    # start it and open the browser
+optcg web --port 8001        # if 8000 is taken
+```
+
+The page has to be built once (and again after its code changes). That needs
+Node.js:
+
+```text
+cd ui
+npm install                  # once: React and Vite, into ui/node_modules
+npm run build                # writes ui/dist, which optcg web serves
+```
+
+In PowerShell, type `npm.cmd` instead of `npm` if Windows says running scripts
+is disabled. While changing the page's code, `optcg web --no-browser` plus
+`npm run dev` (in `ui/`) reloads the page on every save.
+
+**Recording an art:** open a card, find the pile under *Where your copies are*
+(e.g. "4× unsorted in Nico Robin YP (deck)"), press **Set art**, click the art
+they are, pick how many, Save. `optcg collection show <card>` shows the same
+afterwards.
+
 
 ```bash
 # Decks — importing a deck you own also credits your collection
@@ -372,7 +405,9 @@ optcg/
   decks.py        deck import and management
   backup.py       snapshots, and JSON export/import of your own data
   cli.py          argparse entry point over all of the above
-tests/            615 tests
+  web/api.py      the browser page's server: FastAPI over the same modules
+ui/               the browser page: React + Vite (`npm run build` -> ui/dist)
+tests/            670 tests; fixtures/ holds the frozen 2026-11-18 sample
 data/             optcg.db, cache/ and backups/ (all gitignored)
 ```
 

@@ -16,7 +16,7 @@ Depends on Phase 1. Model and schema: [DESIGN.md](DESIGN.md).
 | Milestone | Status |
 |---|---|
 | M0 Real data in — no code | Sample in: 172 copies, 5 places (2026-11-18); more decks to come |
-| M1 Card browser + record the art | Planned (D-044) |
+| M1 Card browser + record the art | **Built** (branch `m1-browser`, D-045); owner's look + first real art pending |
 | M2 Locations | Backend **done** — `kind` column, D-025. UI pending |
 | M3 Decks & completion | |
 | M4 Fast loose-card entry | |
@@ -144,7 +144,7 @@ The 2026-11-18 sample is the yardstick: **172 copies of 77 cards in 5 places**
 
 **Done when:**
 - [ ] you open a browser and see your own 172 copies, with pictures
-- [ ] every place and card count on screen matches the CLI (parity test green)
+- [x] every place and card count on screen matches the CLI (parity test green)
 - [ ] you record the art of a real alt art in the browser, and the CLI shows it
 
 ---

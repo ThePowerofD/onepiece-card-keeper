@@ -8,8 +8,10 @@ This file is updated after every step. The newest state is the
 
 - **Last finished:** Steps 3-5, the page: grid, card detail, record the art,
   and a Places tab. **M1's code is complete; it needs your eyes.**
-- **Working on:** docs (README, PHASE_2 status, a decision entry), then
-  beyond M1.
+- **Working on:** beyond M1 (see "After M1" at the end of this file).
+- **Docs:** README has a "The browser page (M1)" section; PHASE_2 marks M1
+  built; my own choices are written up as **D-045** in DECISIONS.md for you to
+  review.
 - **Tests:** 670 passing at the last commit, coverage 97% (the server: 100%).
 - **Your real database:** only read, never written. All write tests use a
   throwaway copy.
@@ -144,4 +146,27 @@ Files in `ui/src/`, each small and commented:
 - Added that exact request shape to the automated tests.
 
 **Not checked:** how it looks and feels - that needs a person and a screen.
+
+### Docs (done, commit below)
+- README: new section **"The browser page (M1)"** - how to start it, how to
+  build it, how to record an art; status, figures and layout updated.
+- PHASE_2: M1 marked built; the parity box is ticked. The other two boxes
+  (you see it; you record a real alt art) are yours.
+- DECISIONS: **D-045** records every choice I made tonight without you, so
+  you can confirm or overrule each one.
+
+## How to see it in the morning
+
+The page is already built on your PC (`ui/dist`), so:
+
+```text
+venv\Scriptsctivate
+git checkout m1-browser
+optcg web
+```
+
+It opens in your browser. Compare the **Places** tab with
+`tests/fixtures/sample_2026-11-18/SAMPLE.md`. Then pick a card you know is an
+alt art, open it, and use **Set art** - and check with
+`optcg collection show <card>` that the terminal says the same.
 
