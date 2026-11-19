@@ -4,17 +4,38 @@ Branch: **`m1-browser`**. `main` is untouched. Nothing here is merged.
 This file is updated after every step. The newest state is the
 **Current status** section; the log below it is in order.
 
+## Morning summary (read this first)
+
+**All four Phase 2 milestones are built on `m1-browser`**: M1 (cards with
+pictures + recording the art), M2 (new places, moving cards), M3 (decks, paste
+a decklist with preview), M4 (fast entry: +1 with Undo). 10 commits, all
+pushed. Nothing merged into `main`. Your real database was never written.
+
+**I stopped on purpose** after M4. PHASE_2 says Phase 3 features should be
+chosen from using the app, and you haven't used it yet.
+
+**Your to-do, in order:**
+1. **Look at it** (5 min): `venv\Scripts\activate`, `git checkout m1-browser`,
+   `optcg web`. Click around all three tabs.
+2. **Trace the sample:** compare the **Places** tab with
+   `tests/fixtures/sample_2026-11-18/SAMPLE.md` (5 places, 172 copies).
+3. **Record one real alt art** on a card you know, then check
+   `optcg collection show <card>` says the same. That's M1's last box.
+4. **Review my choices** - DECISIONS.md **D-045, D-046, D-047**. The ones
+   most worth a look:
+   - the grid is one tile per card, not per art (D-045)
+   - no delete buttons and no physical/wishlist switch in the page (D-046)
+   - no -1 button on the grid, only Undo (D-047)
+5. If you're happy: merge `m1-browser` into `main` (I can do it when you say).
+
+**Things I could not do:** see the page in Chrome (the extension wasn't
+connected) - so how it *looks* is untested; every behaviour behind it is.
+
 ## Current status
 
-- **Last finished:** Steps 3-5, the page: grid, card detail, record the art,
-  and a Places tab. **M1's code is complete; it needs your eyes.**
-- **Beyond M1, also built:** M2 (new places, moving cards), M3 (decks:
-  list, owned vs missing, paste a decklist with preview) and M4 (fast entry:
-  +1 from the grid, with Undo). See the log.
-- **Working on:** see the last log entry.
-- **Docs:** README has a "The browser page (M1)" section; PHASE_2 marks M1
-  built; my own choices are written up as **D-045** in DECISIONS.md for you to
-  review.
+- **Last finished:** M4, and this summary. **Stopped here on purpose.**
+- **Docs:** README "The browser page (M1)" section; PHASE_2 marks M1-M4
+  built; my own choices are **D-045, D-046, D-047** in DECISIONS.md.
 - **Tests:** 691 passing at the last commit, coverage 97% (the server: 100%).
 - **Your real database:** only read, never written. All write tests use a
   throwaway copy.
