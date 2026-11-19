@@ -240,6 +240,11 @@ In PowerShell, type `npm.cmd` instead of `npm` if Windows says running scripts
 is disabled. While changing the page's code, `optcg web --no-browser` plus
 `npm run dev` (in `ui/`) reloads the page on every save.
 
+The page has three tabs: **Cards** (the grid), **Places** (every place, with
+a form to add one) and **Decks** (your decks, owned vs missing, and *Import a
+decklist* - paste, Preview, Import). On a card, each pile can be given its
+art or moved to another place.
+
 **Recording an art:** open a card, find the pile under *Where your copies are*
 (e.g. "4× unsorted in Nico Robin YP (deck)"), press **Set art**, click the art
 they are, pick how many, Save. `optcg collection show <card>` shows the same

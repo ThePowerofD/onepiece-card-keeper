@@ -8,11 +8,13 @@ This file is updated after every step. The newest state is the
 
 - **Last finished:** Steps 3-5, the page: grid, card detail, record the art,
   and a Places tab. **M1's code is complete; it needs your eyes.**
-- **Working on:** beyond M1 (see "After M1" at the end of this file).
+- **Beyond M1, also built:** M2 (new places, moving cards) and M3 (decks:
+  list, owned vs missing, paste a decklist with preview). See the log.
+- **Working on:** see the last log entry.
 - **Docs:** README has a "The browser page (M1)" section; PHASE_2 marks M1
   built; my own choices are written up as **D-045** in DECISIONS.md for you to
   review.
-- **Tests:** 670 passing at the last commit, coverage 97% (the server: 100%).
+- **Tests:** 685 passing at the last commit.
 - **Your real database:** only read, never written. All write tests use a
   throwaway copy.
 
@@ -170,3 +172,37 @@ It opens in your browser. Compare the **Places** tab with
 alt art, open it, and use **Set art** - and check with
 `optcg collection show <card>` that the terminal says the same.
 
+### Beyond M1: M2 and M3 in the browser (done, commits `285beed` + below)
+**Server** (`optcg/web/api.py`), same rule - only CLI functions, no SQL:
+- `GET /api/storage-types`, `POST /api/places` - create a place
+  (`storage add`)
+- `POST /api/copies/move` - move copies (`collection move`); out of or into a
+  physical deck, the deck's list changes too (D-041), same as the CLI
+- `GET /api/decks`, `GET /api/decks/{id}` - `deck list`, `deck show`
+- `POST /api/decks/import` - paste a decklist (`deck paste`), with
+  `preview` = run it on an in-memory copy and keep nothing (like `--dry-run`).
+  A taken name answers **409 "name_exists"** so the page can ask - it never
+  picks replace or second deck by itself (D-017).
+
+**Page:**
+- Card detail: each pile now has **Move** next to Set art (choose a place,
+  how many). Moving out of a deck says the deck's list gets shorter.
+- Places tab: a **New place** form (name + type).
+- New **Decks** tab: your decks; open one to see Need / In deck / Own (and
+  Missing for a wishlist); **Import a decklist**: name, "I own it" or
+  "wishlist", paste, **Preview** (nothing saved, shows warnings) then
+  **Import**. On a taken name it asks: *Import as a second deck* or
+  *Replace the old one* (with what replacing does spelled out).
+
+**Not built on purpose:** deleting decks or places from the page, and
+switching a deck between physical and wishlist. Both are destructive or have
+refusal rules (D-041) worth deciding with you first. The CLI still does them.
+
+**Checked:** 15 new server tests (685 total); then on a fresh throwaway copy
+of your database: created "Binder B", moved a Doflamingo into it, previewed
+the Kid list as a wishlist (not saved), a duplicate name got 409, totals
+stayed 172. Your real database afterwards: still 2 places, 3 decks, 172
+copies, 0 arts.
+
+**This is how you could add your remaining decks:** Decks tab → Import a
+decklist → paste → Preview → Import. Same result as `optcg deck import`.

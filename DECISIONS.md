@@ -1556,3 +1556,30 @@ SQL; every route calls a function the CLI uses, and errors keep the CLI's
 wording. It binds to 127.0.0.1 only. The parity test (`tests/test_web.py`)
 checks every place, card and total of the frozen sample three ways - the sample
 file, the CLI's functions, the API - plus a set-art round trip.
+
+---
+
+## D-046 — M2 and M3 in the browser, minus the destructive parts
+
+**2026-11-19** · *Built overnight on branch `m1-browser` after M1, at the
+owner's request to go past M1. Waits for the owner's review.*
+
+**What's in.** Creating a storage place; moving copies between places (from a
+pile on the card detail); the deck list and each deck's owned vs missing; and
+pasting a decklist, as physical or wishlist, with a **Preview** that runs the
+import on an in-memory copy and keeps nothing - the browser's `--dry-run`
+(D-034). A taken deck name comes back as `409 name_exists` and the page offers
+*import as a second deck* or *replace*, spelling out what replacing does; it
+never picks (D-017).
+
+**What's out, on purpose.** Deleting a deck or a place, and switching a deck
+between physical and wishlist. Deleting was off limits for the night, and
+both have consequences (copies to just-loose, D-041's refusal for a wishlist
+with cards) that deserve the owner's say on how a screen should ask. Building
+a deck from a wishlist - PHASE_2 M3's gather-the-cards screen - is also not
+built: its rules were agreed (pick the source per card) but the screen is a
+design question. The CLI covers all of these meanwhile.
+
+**Moves keep the deck rule.** Moving copies out of or into a physical deck
+changes its list by the same amount (D-041), exactly as `collection move`
+does; the page says so before saving.

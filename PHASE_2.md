@@ -17,8 +17,8 @@ Depends on Phase 1. Model and schema: [DESIGN.md](DESIGN.md).
 |---|---|
 | M0 Real data in — no code | Sample in: 172 copies, 5 places (2026-11-18); more decks to come |
 | M1 Card browser + record the art | **Built** (branch `m1-browser`, D-045); owner's look + first real art pending |
-| M2 Locations | Backend **done** — `kind` column, D-025. UI pending |
-| M3 Decks & completion | |
+| M2 Locations | **Built** in the browser (branch `m1-browser`, D-046): new place, move copies |
+| M3 Decks & completion | **Built** (branch `m1-browser`, D-046): list, owned vs missing, paste with preview; building from a wishlist still to do |
 | M4 Fast loose-card entry | |
 
 **The starting position (2026-11-19):** 4,712 printings synced, 639 tests

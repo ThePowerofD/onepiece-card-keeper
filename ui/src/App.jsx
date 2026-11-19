@@ -2,10 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "./api.js";
 import CardsView from "./CardsView.jsx";
 import PlacesView from "./PlacesView.jsx";
+import DecksView from "./DecksView.jsx";
 import CardDetail from "./CardDetail.jsx";
 
-// The whole page: a header with the headline numbers, two tabs (Cards and
-// Places), and the card detail that opens over either of them.
+// The whole page: a header with the headline numbers, three tabs (Cards,
+// Places, Decks), and the card detail that opens over any of them.
 export default function App() {
   const [tab, setTab] = useState("cards");
   const [summary, setSummary] = useState(null);
@@ -37,6 +38,9 @@ export default function App() {
           <button className={tab === "places" ? "active" : ""} onClick={() => setTab("places")}>
             Places
           </button>
+          <button className={tab === "decks" ? "active" : ""} onClick={() => setTab("decks")}>
+            Decks
+          </button>
         </nav>
       </header>
 
@@ -47,11 +51,9 @@ export default function App() {
       )}
 
       <main>
-        {tab === "cards" ? (
-          <CardsView version={version} onOpen={setOpenCard} />
-        ) : (
-          <PlacesView version={version} onOpen={setOpenCard} />
-        )}
+        {tab === "cards" && <CardsView version={version} onOpen={setOpenCard} />}
+        {tab === "places" && <PlacesView version={version} onOpen={setOpenCard} onChanged={changed} />}
+        {tab === "decks" && <DecksView version={version} onOpen={setOpenCard} onChanged={changed} />}
       </main>
 
       {openCard && (
