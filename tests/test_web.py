@@ -242,6 +242,114 @@ class RouteTests(WebTestCase):
             client.close()
 
 
+class PlacesAndMoveTests(WebTestCase):
+    """M2: create a place, move copies; the CLI's functions see the same."""
+
+    def test_storage_types(self):
+        self.assertIn("binder", self.get("/api/storage-types"))
+
+    def test_create_a_place(self):
+        response = self.client.post("/api/places", json={"name": "Box 1", "kind": "booster-box"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["copies"], 0)
+        self.assertIn(("booster-box", "Box 1"),
+                      [(p["kind"], p["name"]) for p in self.get("/api/places")])
+
+    def test_duplicate_or_bad_type_is_refused(self):
+        self.client.post("/api/places", json={"name": "Box 1", "kind": "binder"})
+        again = self.client.post("/api/places", json={"name": "Box 1", "kind": "binder"})
+        self.assertEqual(again.status_code, 400)
+        bad = self.client.post("/api/places", json={"name": "X", "kind": "no-such-type"})
+        self.assertEqual(bad.status_code, 400)
+
+    def test_move_between_places_keeps_every_total(self):
+        response = self.client.post("/api/copies/move", json={
+            "card": "OP12-107", "quantity": 2, "from_place": "trading_binder",
+            "to_place": "just-loose"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["now_at_destination"], 2)
+        rows = store.contents(self.conn, "just-loose")
+        self.assertIn(("OP12-107", None, 2), [(r[0], r[1], r[3]) for r in rows])
+        self.assertEqual(self.get("/api/summary")["copies"], 172)
+
+    def test_moving_out_of_a_deck_shrinks_its_list(self):
+        response = self.client.post("/api/copies/move", json={
+            "card": "OP09-107", "quantity": 1, "from_place": "Nico Robin YP",
+            "from_kind": "deck", "to_place": "trading_binder"})
+        self.assertEqual(response.status_code, 200, response.text)
+        robin = next(d for d in list_decks(self.conn) if d.name == "Nico Robin YP")
+        self.assertEqual(robin.total_cards, 50)
+        self.assertEqual(self.get("/api/summary")["copies"], 172)
+
+    def test_moving_more_than_is_there_is_refused(self):
+        response = self.client.post("/api/copies/move", json={
+            "card": "OP12-107", "quantity": 9, "from_place": "trading_binder",
+            "to_place": "just-loose"})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("not 9", response.json()["detail"])
+
+
+DECKLIST = "Leader\n1 Nico Robin (OP09-062)\nCharacter (4)\n4 Nico Robin (OP09-107)\n"
+
+
+class DeckTests(WebTestCase):
+    """M3: decks in the browser, the same as `deck list` / `deck show` / `deck paste`."""
+
+    def deck_id(self, name):
+        return next(d for d in self.get("/api/decks") if d["name"] == name)["id"]
+
+    def test_deck_list_matches_the_cli(self):
+        self.assertEqual(self.get("/api/decks"), [d._asdict() for d in list_decks(self.conn)])
+
+    def test_deck_detail(self):
+        detail = self.get(f"/api/decks/{self.deck_id('Reiju')}")
+        self.assertEqual((detail["total_cards"], detail["in_deck_total"], detail["complete"]),
+                         (51, 51, True))
+        self.assertEqual(sum(1 for c in detail["cards"] if c["is_leader"]), 1)
+
+    def test_unknown_deck_is_refused(self):
+        self.assertEqual(self.client.get("/api/decks/999").status_code, 400)
+
+    def test_preview_saves_nothing(self):
+        response = self.client.post("/api/decks/import", json={
+            "text": DECKLIST, "name": "Test", "physical": False, "preview": True})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()["preview"])
+        self.assertEqual(response.json()["total_cards"], 5)
+        self.assertNotIn("Test", [d["name"] for d in self.get("/api/decks")])
+
+    def test_import_a_wishlist_leaves_the_collection_alone(self):
+        response = self.client.post("/api/decks/import", json={
+            "text": DECKLIST, "name": "Want", "physical": False})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.get("/api/summary")["copies"], 172)
+        detail = self.get(f"/api/decks/{self.deck_id('Want')}")
+        self.assertFalse(detail["physical"])
+
+    def test_import_physical_credits_the_collection(self):
+        response = self.client.post("/api/decks/import", json={
+            "text": DECKLIST, "name": "Mini", "physical": True})
+        self.assertEqual(response.json()["collection_credited"], 5)
+        self.assertEqual(self.get("/api/summary")["copies"], 177)
+
+    def test_name_clash_asks_instead_of_choosing(self):
+        response = self.client.post("/api/decks/import", json={
+            "text": DECKLIST, "name": "Reiju", "physical": False})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["code"], "name_exists")
+        self.assertEqual(self.get("/api/summary")["copies"], 172)  # nothing happened
+
+    def test_name_clash_import_as_second(self):
+        response = self.client.post("/api/decks/import", json={
+            "text": DECKLIST, "name": "Reiju", "physical": False, "on_conflict": "new"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(sum(1 for d in self.get("/api/decks") if d["name"] == "Reiju"), 2)
+
+    def test_empty_list_is_refused(self):
+        response = self.client.post("/api/decks/import", json={"text": "hello", "name": "X"})
+        self.assertEqual(response.status_code, 400)
+
+
 class WebCommandTests(unittest.TestCase):
     def test_starts_on_this_computer_only(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:

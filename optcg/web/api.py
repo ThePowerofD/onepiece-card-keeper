@@ -26,7 +26,14 @@ from pydantic import BaseModel, Field
 from optcg import collection as coll
 from optcg import storage as store
 from optcg.collection import CollectionError
-from optcg.decks import DeckError, list_decks
+from optcg.decks import (
+    DeckError,
+    DeckNameExists,
+    import_decklist,
+    list_decks,
+    resolve_deck,
+    show_deck,
+)
 from optcg.storage import StorageError
 
 # ui/dist, built by `npm run build` in ui/. Two levels above optcg/web/.
@@ -42,6 +49,34 @@ class SetArtRequest(BaseModel):
     kind: str | None = Field(default=None, description="the place's type, or 'deck'")
     from_art: str | None = Field(
         default=None, description="which copies to change; none = the unsorted ones")
+
+
+class NewPlaceRequest(BaseModel):
+    """Create a storage place (storage.add_location) - M2."""
+    name: str = Field(min_length=1)
+    kind: str = Field(description="a storage type: binder, booster-box, ... (GET /api/storage-types)")
+    notes: str | None = None
+
+
+class MoveRequest(BaseModel):
+    """Move copies from one place to another (collection.move) - M2."""
+    card: str
+    quantity: int = Field(gt=0)
+    from_place: str
+    from_kind: str | None = None
+    to_place: str
+    to_kind: str | None = None
+    art: str | None = Field(default=None, description="which pile; none = the unsorted copies")
+
+
+class DeckImportRequest(BaseModel):
+    """Import a pasted decklist (decks.import_decklist) - M3."""
+    text: str
+    name: str = Field(min_length=1)
+    physical: bool = True
+    on_conflict: str | None = Field(
+        default=None, description="when the name is taken: 'replace' or 'new'; none = ask")
+    preview: bool = Field(default=False, description="show the result, save nothing (D-034)")
 
 
 def _rows(items) -> list[dict]:
@@ -103,6 +138,38 @@ def place_contents(conn: sqlite3.Connection, name: str, kind: str | None) -> dic
     }
 
 
+def deck_detail(conn: sqlite3.Connection, deck_id: int) -> dict:
+    """`decks.show_deck` as JSON - what `optcg deck show` prints."""
+    detail = show_deck(conn, deck_id)
+    return {
+        "id": detail.id, "name": detail.name, "leader_id": detail.leader_id,
+        "physical": detail.is_physical, "total_cards": detail.total_cards,
+        "in_deck_total": detail.in_deck_total, "missing_total": detail.missing_total,
+        "complete": detail.is_complete, "cards": _rows(detail.cards),
+    }
+
+
+def import_deck_text(conn: sqlite3.Connection, body: DeckImportRequest) -> dict:
+    """Import a pasted list, or with `preview` run it on a copy and keep nothing.
+
+    A copy rather than a rolled-back transaction, for the same reason as the
+    CLI's --dry-run (D-034): the modules commit as they go.
+    """
+    target = conn
+    if body.preview:
+        target = sqlite3.connect(":memory:")
+        conn.backup(target)
+        target.execute("PRAGMA foreign_keys = ON")
+    try:
+        result = import_decklist(target, body.text, body.name, body.physical, body.on_conflict)
+        out = result._asdict()
+        out["preview"] = body.preview
+        return out
+    finally:
+        if target is not conn:
+            target.close()
+
+
 def summary(conn: sqlite3.Connection) -> dict:
     """The headline numbers, from the same places the CLI's lists read."""
     all_places = places(conn)
@@ -129,6 +196,13 @@ def create_app(db_path: Path) -> FastAPI:
             yield conn
         finally:
             conn.close()
+
+    # A name clash is a question for the owner, not an error (D-017): 409 with
+    # a code the page recognises, so it can offer replace / import as second.
+    @app.exception_handler(DeckNameExists)
+    async def name_taken(_: Request, exc: DeckNameExists) -> JSONResponse:
+        return JSONResponse(status_code=409, content={
+            "detail": str(exc), "code": "name_exists", "deck_id": exc.deck_id})
 
     @app.exception_handler(CollectionError)
     @app.exception_handler(StorageError)
@@ -181,6 +255,40 @@ def create_app(db_path: Path) -> FastAPI:
         where = store.resolve_container(conn, body.place, body.kind)
         unsorted_left = coll.set_art(conn, card, body.quantity, body.art, where, body.from_art)
         return {"unsorted_left_here": unsorted_left, "card": card_detail(conn, card)}
+
+    # ---- M2: places and moving copies -----------------------------------
+
+    @app.get("/api/storage-types")
+    def get_storage_types(conn: sqlite3.Connection = Depends(get_conn)) -> list[str]:
+        return store.storage_types(conn)
+
+    @app.post("/api/places")
+    def post_place(body: NewPlaceRequest, conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+        store.add_location(conn, body.name.strip(), body.kind, body.notes)
+        return place_contents(conn, body.name.strip(), body.kind)
+
+    @app.post("/api/copies/move")
+    def post_move(body: MoveRequest, conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+        card = body.card.strip().upper()
+        frm = store.resolve_container(conn, body.from_place, body.from_kind)
+        to = store.resolve_container(conn, body.to_place, body.to_kind)
+        now_there = coll.move(conn, card, body.quantity, frm, to, body.art)
+        return {"now_at_destination": now_there, "card": card_detail(conn, card)}
+
+    # ---- M3: decks -------------------------------------------------------
+
+    @app.get("/api/decks")
+    def get_decks(conn: sqlite3.Connection = Depends(get_conn)) -> list[dict]:
+        return _rows(list_decks(conn))
+
+    @app.get("/api/decks/{deck_id}")
+    def get_deck(deck_id: int, conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+        return deck_detail(conn, resolve_deck(conn, deck_id))
+
+    @app.post("/api/decks/import")
+    def post_deck_import(body: DeckImportRequest,
+                         conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+        return import_deck_text(conn, body)
 
     if UI_DIST.is_dir():
         app.mount("/", StaticFiles(directory=UI_DIST, html=True), name="ui")
