@@ -1491,3 +1491,31 @@ second batch that happens to have the same name, and the help says it plainly.
 
 Importing into a physical deck works like `collection add` into it: the list
 grows with the copies (D-041). A wishlist deck is refused.
+
+---
+
+## D-044 — M1 records the art too; the 2026-11-18 sample is its yardstick
+
+**2026-11-19** · *Widens PHASE_2 M1; moves set-art from M2*
+
+M0 has a real sample (3 decks, a binder, loose cards: 172 copies, 77 cards) and
+the CLI covers the whole loop, so the owner chose to build the app now and enter
+the rest of the collection through it, rather than finish M0 in the terminal.
+
+**M1 records the art, not just shows it.** None of the 172 copies has an art
+recorded, while 43 of the 77 cards exist in more than one printing - D-016's
+"credit the plain art until told otherwise" is the largest guess M0 hasn't
+tested. The owner judged it visually obvious and terminal-awkward: an art is
+recognised by looking at it. Three options were weighed: M1 as planned
+(view-only, art in M2), M1 plus set-art (chosen), and M1 plus set-art plus deck
+paste. The last was rejected as too long a stretch before anything is usable,
+and harder to tell where something went wrong. Deck paste stays M3; the
+remaining decks go in with `deck import` meanwhile.
+
+**The sample is the yardstick.** M1 is done only when the browser shows the
+same numbers as the CLI for the frozen baseline, checked by a parity test and by
+eye, and the first art recorded in the browser reads the same in the CLI. The
+point is that the owner can trace their own cards from one phase to the next,
+not trust that they came through. The parity test reads a copy of the real
+sample from `tests/fixtures/`: the repo is public and the owner is fine with
+their card list being in it; the database itself stays out of git.

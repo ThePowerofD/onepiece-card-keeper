@@ -15,15 +15,15 @@ Depends on Phase 1. Model and schema: [DESIGN.md](DESIGN.md).
 
 | Milestone | Status |
 |---|---|
-| M0 Real data in — no code | |
-| M1 API layer + card browser | |
+| M0 Real data in — no code | Sample in: 172 copies, 5 places (2026-11-18); more decks to come |
+| M1 Card browser + record the art | Planned (D-044) |
 | M2 Locations | Backend **done** — `kind` column, D-025. UI pending |
 | M3 Decks & completion | |
 | M4 Fast loose-card entry | |
 
-**The starting position:** 4,338 cards synced, 246 tests passing, and zero rows
-in `collection`, `decks` and `storage_locations`. The backend is built and has
-never met a real card.
+**The starting position (2026-11-19):** 4,712 printings synced, 639 tests
+passing, and a real sample of 172 copies in 3 decks, a binder and just-loose.
+The CLI covers the whole loop; no art has been recorded yet.
 
 ---
 
@@ -62,49 +62,90 @@ built deck appears in `deck list`.
 
 ---
 
-## M1 — API layer + card browser
+## M1 — Card browser with images, and recording the art
 
-The milestone where it stops being a script.
+The milestone where it stops being a script. **Widened by D-044:** besides
+showing the cards, M1 records which art a copy is - the one thing the owner
+wants a screen for first, because an art is recognised by looking at it. It
+was M2's `set-art` route; it moves here. Adding decks in the browser stays M3:
+until then the remaining decks go in with `deck import` in the terminal.
+
+Built in small, separately checkable steps - each one is usable before the
+next starts.
+
+### Before starting
+
+- **Node.js (LTS) installed** - it isn't on this machine yet, and Vite needs it.
+  One-time, by the owner.
+- **The baseline is frozen** (see *Traceability* below).
 
 ### a. Logic-layer gaps
 
-`collection.list_cards()` needs three things before it can back a grid:
+`collection.list_cards()` already takes `q` (name search) and `offset`. Still
+missing before it can back a grid:
 
-- **`image_url` in the SELECT** — it's on every `cards` row and currently unread.
-- **`q` — name search.** `LIKE %q%` on `c.name`.
-- **`offset`, and a total count.** It takes `limit` but has no pagination, and
-  4,712 printings will not arrive in one response.
+- **`image_url` in the SELECT** - it's on every `cards` row and currently unread.
+- **A total count** for the same filters, so the grid can page.
 
 Keep it returning plain rows; the HTTP layer does the JSON shaping.
 
 ### b. `optcg/web/api.py`
 
-FastAPI. Imports the existing modules and calls them — **no SQL in this file.**
-One dependency yields a connection from `db_setup.connect()`.
+FastAPI. Imports the existing modules and calls them - **no SQL in this file.**
+One dependency yields a connection from `db_setup.connect()`. New dependencies:
+`fastapi`, `uvicorn`, and `httpx` for tests. Started by one command,
+`optcg web`, on `localhost` only.
 
 | Route | Calls |
 |---|---|
-| `GET /api/cards` | `collection.list_cards` — `set`, `color`, `category`, `owned_only`, `q`, `limit`, `offset` |
-| `GET /api/cards/{base_card_id}` | `collection.show` → `CardStatus` |
+| `GET /api/cards` | `collection.list_cards` - `set`, `color`, `category`, `owned_only`, `q`, `limit`, `offset` |
+| `GET /api/cards/{base_card_id}` | `collection.show` -> `CardStatus` (arts, where every copy is, every printing) |
 | `GET /api/sets` | distinct `set_code`, for the filter dropdown |
+| `GET /api/places` | `storage.list_locations` + `decks.list_decks` - every place with its counts |
+| `POST /api/copies/set-art` | `collection.set_art` - card, quantity, art, place (D-044) |
 
-`CardStatus` and `PrintingStatus` are `NamedTuple`s, so `._asdict()` gets most of
-the way to a response body.
+`CardStatus` and friends are `NamedTuple`s, so `._asdict()` gets most of the way
+to a response body.
 
 **Error mapping:** `CollectionError` / `DeckError` carry messages already fit to
-print — map them to `400` with the message intact, and let the UI show it. Don't
-invent a second error vocabulary.
+print - map them to `400` with the message intact, and let the UI show it. Don't
+invent a second error vocabulary. A set-art that asks for more copies than the
+place holds is refused by `set_art` and writes nothing; the UI keeps its state.
 
-### c. `ui/` — Vite + React
+### c. `ui/` - Vite + React
 
-Card grid with images, filter bar (set / color / owned-only / search), card
-detail showing every printing with owned counts.
+1. **Grid** - card images with name and owned count, filter bar (set / color /
+   owned-only / search). Owned-only is the default view: it's the sample.
+2. **Card detail** - every printing side by side, how many you own of each art,
+   and *where* the copies are (each deck, binder, just-loose), unsorted first.
+3. **Record the art** - on the detail, pick a place's unsorted copies, click the
+   printing they are, say how many. Same rule as the CLI: the total in the place
+   never changes, only how it's split by art (D-030).
 
-Images hotlink `image_url` directly. The local cache stays Phase 5 — an `<img>`
-tag is enough to make the app feel like a card app, which was the point of
-pulling images forward.
+Images hotlink `image_url` directly. The local cache stays Phase 5.
 
-**Done when:** you open a browser and see your own collection, with pictures.
+### Traceability - the sample must come through unchanged
+
+The 2026-11-18 sample is the yardstick: **172 copies of 77 cards in 5 places**
+(decks Reiju, Nico Robin YP, Eustass Kid Y at 51 each; binder `trading_binder`
+11; `just-loose` 8), no art recorded.
+
+- **Frozen baseline:** `data/backups/collection-20261118-235202.json`, kept as
+  is, plus a one-page human list of it (place -> card -> copies -> art) for
+  checking the screen by eye.
+- **A parity test:** the baseline is loaded into a throwaway database and every
+  API answer is compared with what the modules behind the CLI say for the same
+  thing - per place, per card, totals. A mismatch fails the suite. The test
+  reads a copy of the real sample from `tests/fixtures/` (card ids, counts,
+  place names). The repo is public; the owner is fine with the sample being in
+  it (2026-11-19). The database and `decklists/` stay gitignored.
+- **Round trip on the first real write:** the first art recorded in the browser
+  must read the same in `optcg collection show` and `optcg storage show`.
+
+**Done when:**
+- [ ] you open a browser and see your own 172 copies, with pictures
+- [ ] every place and card count on screen matches the CLI (parity test green)
+- [ ] you record the art of a real alt art in the browser, and the CLI shows it
 
 ---
 
@@ -119,11 +160,10 @@ list can't tell you.
 | `POST /api/locations` | `storage.add_location` |
 | `GET /api/locations/{name}` | `storage.contents` |
 | `POST /api/copies/move` | `collection.move` |
-| `POST /api/copies/set-art` | `collection.set_art` |
 
-UI: a locations page, plus move and set-art controls on the card detail from M1.
-Setting the art is the click-the-card-where-it-sits flow (D-030), so it belongs
-on the container view as much as on the card view.
+UI: a locations page, plus move controls on the card detail from M1. Recording
+the art moved to M1 (D-044); here it also goes on the container view, since
+it's the click-the-card-where-it-sits flow (D-030).
 
 A move that exceeds the source is an **error** (D-030 superseded D-019's warn).
 Surface the message — it names what the container actually holds — and keep the
