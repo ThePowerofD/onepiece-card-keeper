@@ -158,6 +158,20 @@ class SetArtTests(WebTestCase):
         self.assertEqual(self.get("/api/cards", owned_only="true", q="nico robin",
                                   limit=50)["total"], 3)
 
+    def test_change_art_exactly_as_the_page_sends_it(self):
+        # "Set art": from_art is null (the unsorted pile), art is a full printing id.
+        first = self.post(card="OP09-107", quantity=2, art="OP09-107_p1",
+                          place="Nico Robin YP", kind="deck", from_art=None)
+        self.assertEqual(first.status_code, 200, first.text)
+        # "Change art" on the p1 pile: one of them is really the plain art.
+        second = self.post(card="OP09-107", quantity=1, art="OP09-107",
+                           place="Nico Robin YP", kind="deck", from_art="OP09-107_p1")
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertEqual(
+            {h["card_image_id"]: h["quantity"] for h in second.json()["card"]["holdings"]},
+            {None: 2, "OP09-107": 1, "OP09-107_p1": 1})
+        self.assertEqual(coll.show(self.conn, "OP09-107").total_owned, 4)
+
     def test_more_than_the_place_holds_is_refused_and_writes_nothing(self):
         response = self.post(card="OP09-107", quantity=5, art="p1",
                              place="Nico Robin YP", kind="deck")

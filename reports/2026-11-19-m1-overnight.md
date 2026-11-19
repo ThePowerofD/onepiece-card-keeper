@@ -6,10 +6,11 @@ This file is updated after every step. The newest state is the
 
 ## Current status
 
-- **Last finished:** Step 2, the local server (`optcg web`), its API, the
-  frozen sample and the parity test.
-- **Working on:** Steps 3-5, the page itself (grid, card detail, record art).
-- **Tests:** 669 passing at the last commit, coverage 97% (the server: 100%).
+- **Last finished:** Steps 3-5, the page: grid, card detail, record the art,
+  and a Places tab. **M1's code is complete; it needs your eyes.**
+- **Working on:** docs (README, PHASE_2 status, a decision entry), then
+  beyond M1.
+- **Tests:** 670 passing at the last commit, coverage 97% (the server: 100%).
 - **Your real database:** only read, never written. All write tests use a
   throwaway copy.
 
@@ -109,3 +110,38 @@ Node.js 26.13.1 itself was installed earlier with `winget` (you clicked Yes).
   11). Fixed by counting from the sample instead of guessing.
 - Note: the test client prints a deprecation warning suggesting a package
   called `httpx2`. Harmless; **not installed** because it wasn't on your list.
+
+### Steps 3-5: the page (done, commit below)
+Files in `ui/src/`, each small and commented:
+- `App.jsx` - header with the totals (copies, cards, places), two tabs.
+- `CardsView.jsx` - **the grid**: picture, id, name, "own N", and for cards
+  with several arts "3 arts · 0/4 set" (orange while some art isn't set).
+  Filters: name search (waits for typing to pause), set, color, type,
+  "Only cards I own" (on by default). 60 per page, Previous/Next.
+- `CardDetail.jsx` - **the card**, opened over the grid (Esc or × closes):
+  every art side by side with how many you own of each; "Where your copies
+  are" lists each pile (e.g. "4× unsorted in Nico Robin YP (deck)").
+  **Set art** on a pile: click the art they are, pick how many, Save. Piles
+  that already have an art get **Change art**. The server refuses anything
+  impossible and the page shows its message.
+- `PlacesView.jsx` - **Places tab** (my addition, for traceability): every
+  place with its cards/copies, like `storage list` + `deck list` and like
+  `SAMPLE.md`. Click one to see its contents art by art (`storage show`);
+  click a card id to open it.
+- `CardImage.jsx` - the picture, or a placeholder with the id when a card has
+  no picture (about 60 in the catalog) or it fails to load.
+- `styles.css` - light and dark mode follow your Windows setting; works
+  down to phone width.
+
+**How it was checked without Chrome:**
+- `vite build` passes (the page compiles).
+- Ran `optcg web` on a **throwaway copy** of your real database and drove it
+  exactly the way the page does: the page and its files load; the grid
+  request returns your 77 cards; "Set art" (2 of 4 OP09-107 in Nico Robin YP
+  -> p1) and "Change art" (1 back to base) both worked; asking for 9 was
+  refused with the CLI's message; totals stayed 172.
+- Then confirmed your **real** database is unchanged (0 copies with an art).
+- Added that exact request shape to the automated tests.
+
+**Not checked:** how it looks and feels - that needs a person and a screen.
+
