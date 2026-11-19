@@ -160,7 +160,7 @@ Files in `ui/src/`, each small and commented:
 The page is already built on your PC (`ui/dist`), so:
 
 ```text
-venv\Scriptsctivate
+venv\Scripts\activate
 git checkout m1-browser
 optcg web
 ```
