@@ -15,9 +15,11 @@ from optcg.collection import (
     CollectionError,
     add,
     add_many,
+    card_page,
     committed,
     committed_elsewhere,
     empty_container,
+    game_sets,
     list_cards,
     move,
     remove,
@@ -410,3 +412,60 @@ class ListCardsTests(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CardPageTests(Base):
+    """PHASE_2 M1: the grid is one tile per gameplay card, with a total for paging."""
+
+    def setUp(self):
+        super().setUp()
+        add_card(self.conn, "OP06-001", "OP06-001", name="Nami", color="Blue", game_set="OP06")
+        # A card with no plain printing: it is pictured by its first one.
+        add_card(self.conn, "P-001_p1", "P-001", "p1", name="Promo", game_set="P")
+
+    def test_one_tile_per_card_pictured_by_the_base_printing(self):
+        page = card_page(self.conn)
+        self.assertEqual(page.total, 4)
+        ids = [t.base_card_id for t in page.tiles]
+        self.assertEqual(ids, ["OP05-002", "OP05-097", "OP06-001", "P-001"])
+        luffy = page.tiles[1]
+        self.assertEqual((luffy.name, luffy.printings), ("Luffy", 2))
+
+    def test_owned_counts_every_copy_and_how_many_have_an_art(self):
+        add(self.conn, "OP05-097", 3)
+        add(self.conn, "OP05-097", 1, art="p1")
+        luffy = card_page(self.conn, owned_only=True).tiles[0]
+        self.assertEqual((luffy.owned, luffy.art_recorded), (4, 1))
+
+    def test_owned_only(self):
+        add(self.conn, "OP05-002", 1)
+        page = card_page(self.conn, owned_only=True)
+        self.assertEqual((page.total, [t.base_card_id for t in page.tiles]), (1, ["OP05-002"]))
+
+    def test_filters(self):
+        self.assertEqual(card_page(self.conn, set_code="OP06").total, 1)
+        self.assertEqual(card_page(self.conn, color="blue").total, 1)
+        self.assertEqual(card_page(self.conn, category="Leader").total, 0)
+
+    def test_search_matches_like_find(self):
+        self.assertEqual([t.base_card_id for t in card_page(self.conn, q="luf").tiles],
+                         ["OP05-097"])
+        self.assertEqual(card_page(self.conn, q="nobody").total, 0)
+
+    def test_paging_keeps_the_total(self):
+        first = card_page(self.conn, limit=2, offset=0)
+        second = card_page(self.conn, limit=2, offset=2)
+        self.assertEqual((first.total, second.total), (4, 4))
+        self.assertEqual(len(first.tiles) + len(second.tiles), 4)
+        self.assertFalse({t.base_card_id for t in first.tiles}
+                         & {t.base_card_id for t in second.tiles})
+
+    def test_game_sets(self):
+        self.assertEqual(game_sets(self.conn), ["OP05", "OP06", "P"])
+
+    def test_printings_carry_their_picture(self):
+        self.conn.execute("UPDATE cards SET image_url = 'http://x/OP05-097_p1.jpg' "
+                          "WHERE card_image_id = 'OP05-097_p1'")
+        status = show(self.conn, "OP05-097")
+        self.assertEqual([p.image_url for p in status.printings],
+                         [None, "http://x/OP05-097_p1.jpg"])

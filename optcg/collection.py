@@ -62,6 +62,7 @@ class Printing(NamedTuple):
     printing_variant: str | None
     printing_kind: str | None
     name: str
+    image_url: str | None = None  # the card picture; a few cards have none
 
 
 class CardStatus(NamedTuple):
@@ -135,7 +136,7 @@ def printings_of(conn: sqlite3.Connection, base_card_id: str) -> list[Printing]:
     return [
         Printing(*row)
         for row in conn.execute(
-            "SELECT card_image_id, printing_variant, printing_kind, name FROM cards "
+            "SELECT card_image_id, printing_variant, printing_kind, name, image_url FROM cards "
             "WHERE base_card_id = ? ORDER BY (printing_variant IS NOT NULL), card_image_id",
             (base_card_id,),
         )
@@ -689,3 +690,98 @@ def list_cards(
             params.append(offset)
 
     return conn.execute(" ".join(sql), params).fetchall()
+
+
+# --------------------------------------------------------------------------
+# the card grid (PHASE_2 M1)
+# --------------------------------------------------------------------------
+
+class CardTile(NamedTuple):
+    """One gameplay card in the grid, pictured by its base printing."""
+    base_card_id: str
+    name: str
+    category: str
+    color: str | None
+    game_set: str | None
+    image_url: str | None
+    owned: int        # every copy, whatever its art
+    art_recorded: int  # copies whose art has been recorded
+    printings: int    # how many arts exist
+
+
+class CardPage(NamedTuple):
+    tiles: list[CardTile]
+    total: int        # cards matching the filters, across every page
+
+
+def card_page(
+    conn: sqlite3.Connection,
+    set_code: str | None = None,
+    color: str | None = None,
+    category: str | None = None,
+    owned_only: bool = False,
+    q: str | None = None,
+    limit: int = 60,
+    offset: int = 0,
+) -> CardPage:
+    """One page of the card grid: a tile per gameplay card, plus the total count.
+
+    Per card rather than per printing (`list_cards`), because a copy whose art
+    isn't recorded belongs to the card, not to any one printing - the arts are
+    on the card's detail. Name search matches like `find`: words in any order.
+    """
+    where = ["1=1"]
+    params: list = []
+    if set_code:
+        where.append("b.game_set = ?")
+        params.append(set_code)
+    if color:
+        where.append("b.color LIKE ?")
+        params.append(f"%{color}%")
+    if category:
+        where.append("b.category = ?")
+        params.append(category)
+    if owned_only:
+        where.append("COALESCE(o.owned, 0) > 0")
+    if q:
+        from optcg.resolve import find_cards
+
+        ids = [m.base_card_id for m in find_cards(conn, q)]
+        if not ids:
+            return CardPage([], 0)
+        where.append(f"b.base_card_id IN ({','.join('?' * len(ids))})")
+        params += ids
+
+    # `b` is each card's base printing: the one whose id is the card's id, or
+    # the first printing when a card has no plain one.
+    base = (
+        "FROM cards b "
+        "LEFT JOIN (SELECT base_card_id, SUM(quantity) AS owned, "
+        "                  SUM(CASE WHEN card_image_id IS NOT NULL THEN quantity ELSE 0 END) "
+        "                      AS recorded "
+        "           FROM copies GROUP BY base_card_id) o ON o.base_card_id = b.base_card_id "
+        "LEFT JOIN (SELECT base_card_id, COUNT(*) AS n FROM cards GROUP BY base_card_id) pc "
+        "       ON pc.base_card_id = b.base_card_id "
+        "WHERE b.card_image_id = (SELECT MIN(c2.card_image_id) FROM cards c2 "
+        "                         WHERE c2.base_card_id = b.base_card_id "
+        "                         AND (c2.card_image_id = c2.base_card_id "
+        "                              OR NOT EXISTS (SELECT 1 FROM cards c3 "
+        "                                             WHERE c3.card_image_id = c3.base_card_id "
+        "                                             AND c3.base_card_id = b.base_card_id))) "
+        f"AND {' AND '.join(where)}"
+    )
+    total = conn.execute(f"SELECT COUNT(*) {base}", params).fetchone()[0]
+    rows = conn.execute(
+        "SELECT b.base_card_id, b.name, b.category, b.color, b.game_set, b.image_url, "
+        "       COALESCE(o.owned, 0), COALESCE(o.recorded, 0), COALESCE(pc.n, 1) "
+        f"{base} ORDER BY b.base_card_id LIMIT ? OFFSET ?",
+        [*params, max(1, limit), max(0, offset)],
+    ).fetchall()
+    return CardPage([CardTile(*r) for r in rows], total)
+
+
+def game_sets(conn: sqlite3.Connection) -> list[str]:
+    """Every set a card belongs to (OP01, EB02, ST15...), for the set filter."""
+    return [s for (s,) in conn.execute(
+        "SELECT DISTINCT game_set FROM cards WHERE game_set IS NOT NULL ORDER BY game_set"
+    )]
