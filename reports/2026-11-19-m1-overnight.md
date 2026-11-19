@@ -1,62 +1,75 @@
-# Overnight progress report: M1 (card browser + recording the art)
+# Progress report: Phase 2 browser app (M1-M4)
 
-Branch: **`m1-browser`**. `main` is untouched. Nothing here is merged.
-This file is updated after every step. The newest state is the
-**Current status** section; the log below it is in order.
+Branch: **`m1-browser`**. `main` is unchanged; nothing here is merged yet.
+Updated after every step. **Summary** and **To review** come first; the
+**Log** below them is in order.
 
-## Morning summary (read this first)
+## Summary
 
 **All four Phase 2 milestones are built on `m1-browser`**: M1 (cards with
 pictures + recording the art), M2 (new places, moving cards), M3 (decks, paste
 a decklist with preview), M4 (fast entry: +1 with Undo). 10 commits, all
-pushed. Nothing merged into `main`. Your real database was never written.
+pushed. Nothing merged into `main`. The real database was only read, never
+written; every write was tested on a throwaway copy.
 
-**I stopped on purpose** after M4. PHASE_2 says Phase 3 features should be
-chosen from using the app, and you haven't used it yet.
+Work stopped after M4 on purpose: PHASE_2 says Phase 3 features should be
+chosen from using the app, and it hasn't been used yet.
 
-**Your to-do, in order:**
+**Not verified:** how the page *looks* - it was never opened in a browser
+window (no browser tool was connected). Every behaviour behind it is tested.
+
+## To review, in order
+
 1. **Look at it** (5 min): `venv\Scripts\activate`, `git checkout m1-browser`,
-   `optcg web`. Click around all three tabs.
+   `optcg web`. Click through all three tabs.
 2. **Trace the sample:** compare the **Places** tab with
    `tests/fixtures/sample_2026-11-18/SAMPLE.md` (5 places, 172 copies).
-3. **Record one real alt art** on a card you know, then check
-   `optcg collection show <card>` says the same. That's M1's last box.
-4. **Review my choices** - DECISIONS.md **D-045, D-046, D-047**. The ones
-   most worth a look:
+3. **Record one real alt art** on a known card, then check that
+   `optcg collection show <card>` says the same. That's M1's last open box.
+4. **Go over the choices made while building** - DECISIONS.md **D-045, D-046,
+   D-047**. Most worth a look:
    - the grid is one tile per card, not per art (D-045)
    - no delete buttons and no physical/wishlist switch in the page (D-046)
    - no -1 button on the grid, only Undo (D-047)
-5. If you're happy: merge `m1-browser` into `main` (I can do it when you say).
-
-**Things I could not do:** see the page in Chrome (the extension wasn't
-connected) - so how it *looks* is untested; every behaviour behind it is.
+5. If it all holds up: merge `m1-browser` into `main`.
 
 ## Current status
 
-- **Last finished:** M4, and this summary. **Stopped here on purpose.**
+- **Last finished:** M4 and this report. Stopped here on purpose.
 - **Docs:** README "The browser page (M1)" section; PHASE_2 marks M1-M4
-  built; my own choices are **D-045, D-046, D-047** in DECISIONS.md.
+  built; the building choices are **D-045, D-046, D-047** in DECISIONS.md,
+  each marked as awaiting review.
 - **Tests:** 691 passing at the last commit, coverage 97% (the server: 100%).
-- **Your real database:** only read, never written. All write tests use a
-  throwaway copy.
+
+## How to see it
+
+The page is already built on this PC (`ui/dist`):
+
+```text
+venv\Scripts\activate
+git checkout m1-browser
+optcg web
+```
+
+It opens in the default browser (any browser works).
 
 ## How to pick up from here
 
 ```text
 git checkout m1-browser          # the work is on this branch
-git log --oneline main..         # every commit made tonight
+git log --oneline main..         # every commit on the branch
 python -m pytest tests/ -q       # run inside the venv
 ```
 
-To throw all of it away: `git checkout main`. The branch stays until you
-delete it yourself. Nothing on `main` changed.
+To set all of it aside: `git checkout main`. The branch stays until it is
+deleted by hand.
 
 ## Ground rules followed
 
 - Branch only, one commit per step, no merge into `main`.
-- No deleting, and no working around the "no deleting" rule.
-- Installed only what you approved (list below). Nothing system-wide.
-- Your real database is read-only for me.
+- No deleting, and no working around that rule.
+- Only the approved packages installed (list below). Nothing system-wide.
+- The real database is read-only for this work.
 
 ## What was installed (approved 2026-11-19)
 
@@ -66,30 +79,29 @@ delete it yourself. Nothing on `main` changed.
 | venv (pip) | uvicorn | 0.54.0 | runs it |
 | venv (pip) | httpx | 0.28.1 | only for the tests |
 | ui/node_modules (npm) | react, react-dom | 18.3.1 | builds the page |
-| ui/node_modules (npm) | vite, @vitejs/plugin-react | 6.3.5, 4.5.2 | turns the page code into something Chrome opens |
+| ui/node_modules (npm) | vite, @vitejs/plugin-react | 6.3.5, 4.5.2 | turns the page code into something a browser opens |
 
-Versions are pinned exactly in `ui/package.json`. npm asked whether to run
-one setup script (esbuild's `postinstall`). I **did not allow it**: Vite works
-without it because the Windows part of esbuild was already installed, and I
-checked that with a test build. Fewer scripts run = safer.
+Versions are pinned exactly in `ui/package.json`. npm offered to run one setup
+script (esbuild's `postinstall`); it was **not allowed**: Vite works without it
+because the Windows part of esbuild was already installed (checked with a test
+build). Fewer scripts run = safer.
 
-Node.js 26.13.1 itself was installed earlier with `winget` (you clicked Yes).
+Node.js 26.13.1 was installed earlier with `winget` (approved at the Windows
+prompt).
 
-## Not available tonight
+## Choices made while building (to review)
 
-- **Chrome extension not connected**, so I can't look at the page in Chrome.
-  I'm checking it with automated tests and by fetching it. You'll be the first
-  to see it on screen.
-
-## Decisions I made on my own (please review)
+Recorded in full in DECISIONS.md D-045 to D-047. In short:
 
 1. **The grid shows one tile per card, not one per art.** The plan said to add
    pictures to `list_cards`, which lists every art separately. But a copy whose
-   art isn't recorded belongs to the card, not to one art. So I added a new
-   query, `card_page`, with one tile per card, pictured by its plain art. The
-   arts are on the card's detail. `list_cards` is unchanged (the CLI's
-   `browse` still uses it).
-2. **The built page (`ui/dist`) and `ui/node_modules` are not in git.** They
+   art isn't recorded belongs to the card, not to one art. So a new query,
+   `card_page`, gives one tile per card, pictured by its plain art; the arts
+   are on the card's detail. `list_cards` is unchanged (the CLI's `browse`
+   still uses it).
+2. **A Places tab** was added beyond the plan, for tracing the sample.
+3. **No delete buttons, no physical/wishlist switch, no -1** in the page.
+4. **The built page (`ui/dist`) and `ui/node_modules` are not in git.** They
    are regenerated by `npm run build` / `npm install`, like the venv.
 
 ## Log
@@ -100,15 +112,15 @@ Node.js 26.13.1 itself was installed earlier with `winget` (you clicked Yes).
   matching as `optcg find`).
 - `collection.game_sets()`: the list for the set filter.
 - Every printing now carries its picture (`image_url`).
-- Checked read-only on your data: 77 cards, 172 copies, 2,797 cards total.
+- Checked read-only on the real data: 77 cards, 172 copies, 2,797 cards total.
 - 8 new tests; 647 passing.
 
-### Step 2 setup: packages (done)
+### Step 2 setup: packages (done, commit `ef66d5c`)
 - Installed the approved packages (table above), declared them in
   `pyproject.toml`, ignored `ui/node_modules/` and `ui/dist/` in git.
 - Minimal Vite page builds (`npx vite build`, 0.6 s).
 
-### Step 2: the local server (done, commit below)
+### Step 2: the local server (done, commit `dd28736`)
 - **`optcg web`** starts the server on `127.0.0.1` (this PC only) and opens the
   browser. `--port` if 8000 is taken, `--no-browser` to skip opening it.
 - **`optcg/web/api.py`**: no database code of its own; every answer comes from
@@ -121,80 +133,65 @@ Node.js 26.13.1 itself was installed earlier with `winget` (you clicked Yes).
   - `/api/docs` - an automatic page listing all of the above (FastAPI makes it)
 - Errors keep the CLI's own wording (400 + the message).
 - **Frozen sample** in `tests/fixtures/sample_2026-11-18/`:
-  - `collection.json` = your backup from 23:52, unchanged
-  - `cards.json` = the catalog rows for your 77 cards (183 printings)
+  - `collection.json` = the 23:52 backup, unchanged
+  - `cards.json` = the catalog rows for the 77 owned cards (183 printings)
   - **`SAMPLE.md` = the page to check the screen against by eye**
-  - `tests/fixtures/make_sample.py` regenerates them (reads your DB read-only)
+  - `tests/fixtures/make_sample.py` regenerates them (reads the DB read-only)
 - **Parity test** (`tests/test_web.py`): builds a throwaway database from the
   sample and checks every place, every card and the totals three ways: the
   sample file, the CLI's functions, and the API. Also a set-art round trip
   (record an art via the API, read it back via the CLI's functions; totals
   unchanged) and refusals (too many copies, unknown art, unknown place).
-- **Smoke test on your real database, read-only:** `/api/summary` answered
+- **Smoke test on the real database, read-only:** `/api/summary` answered
   `172 copies, 77 cards, 5 places, 2797 catalog`. Matches.
-- One test was wrong at first (I guessed 9 OP12 cards; the Kid deck adds 3, so
-  11). Fixed by counting from the sample instead of guessing.
+- One test was wrong at first (it assumed 9 OP12 cards; the Kid deck adds 3,
+  so 11). Fixed by counting from the sample instead of assuming.
 - Note: the test client prints a deprecation warning suggesting a package
-  called `httpx2`. Harmless; **not installed** because it wasn't on your list.
+  called `httpx2`. Harmless; **not installed** because it wasn't approved.
 
-### Steps 3-5: the page (done, commit below)
+### Steps 3-5: the page (done, commit `770d0ef`)
 Files in `ui/src/`, each small and commented:
-- `App.jsx` - header with the totals (copies, cards, places), two tabs.
+- `App.jsx` - header with the totals (copies, cards, places) and the tabs.
 - `CardsView.jsx` - **the grid**: picture, id, name, "own N", and for cards
   with several arts "3 arts · 0/4 set" (orange while some art isn't set).
   Filters: name search (waits for typing to pause), set, color, type,
   "Only cards I own" (on by default). 60 per page, Previous/Next.
 - `CardDetail.jsx` - **the card**, opened over the grid (Esc or × closes):
-  every art side by side with how many you own of each; "Where your copies
+  every art side by side with how many are owned of each; "Where your copies
   are" lists each pile (e.g. "4× unsorted in Nico Robin YP (deck)").
   **Set art** on a pile: click the art they are, pick how many, Save. Piles
   that already have an art get **Change art**. The server refuses anything
   impossible and the page shows its message.
-- `PlacesView.jsx` - **Places tab** (my addition, for traceability): every
-  place with its cards/copies, like `storage list` + `deck list` and like
-  `SAMPLE.md`. Click one to see its contents art by art (`storage show`);
-  click a card id to open it.
+- `PlacesView.jsx` - **Places tab** (added beyond the plan, for
+  traceability): every place with its cards/copies, like `storage list` +
+  `deck list` and like `SAMPLE.md`. Click one to see its contents art by art
+  (`storage show`); click a card id to open it.
 - `CardImage.jsx` - the picture, or a placeholder with the id when a card has
   no picture (about 60 in the catalog) or it fails to load.
-- `styles.css` - light and dark mode follow your Windows setting; works
-  down to phone width.
+- `styles.css` - light and dark mode follow the Windows setting; works down
+  to phone width.
 
-**How it was checked without Chrome:**
+**How it was checked without a browser window:**
 - `vite build` passes (the page compiles).
-- Ran `optcg web` on a **throwaway copy** of your real database and drove it
+- Ran `optcg web` on a **throwaway copy** of the real database and drove it
   exactly the way the page does: the page and its files load; the grid
-  request returns your 77 cards; "Set art" (2 of 4 OP09-107 in Nico Robin YP
+  request returns the 77 cards; "Set art" (2 of 4 OP09-107 in Nico Robin YP
   -> p1) and "Change art" (1 back to base) both worked; asking for 9 was
   refused with the CLI's message; totals stayed 172.
-- Then confirmed your **real** database is unchanged (0 copies with an art).
+- Then confirmed the **real** database is unchanged (0 copies with an art).
 - Added that exact request shape to the automated tests.
 
 **Not checked:** how it looks and feels - that needs a person and a screen.
 
-### Docs (done, commit below)
+### Docs (done, commits `6fc31c6`, `5113b2b`)
 - README: new section **"The browser page (M1)"** - how to start it, how to
   build it, how to record an art; status, figures and layout updated.
 - PHASE_2: M1 marked built; the parity box is ticked. The other two boxes
-  (you see it; you record a real alt art) are yours.
-- DECISIONS: **D-045** records every choice I made tonight without you, so
-  you can confirm or overrule each one.
+  (seeing it; recording a real alt art) need the owner.
+- DECISIONS: **D-045** records the building choices, to be confirmed or
+  overruled one by one.
 
-## How to see it in the morning
-
-The page is already built on your PC (`ui/dist`), so:
-
-```text
-venv\Scripts\activate
-git checkout m1-browser
-optcg web
-```
-
-It opens in your browser. Compare the **Places** tab with
-`tests/fixtures/sample_2026-11-18/SAMPLE.md`. Then pick a card you know is an
-alt art, open it, and use **Set art** - and check with
-`optcg collection show <card>` that the terminal says the same.
-
-### Beyond M1: M2 and M3 in the browser (done, commits `285beed` + below)
+### Beyond M1: M2 and M3 in the browser (done, commits `285beed`, `71f3667`)
 **Server** (`optcg/web/api.py`), same rule - only CLI functions, no SQL:
 - `GET /api/storage-types`, `POST /api/places` - create a place
   (`storage add`)
@@ -210,39 +207,40 @@ alt art, open it, and use **Set art** - and check with
 - Card detail: each pile now has **Move** next to Set art (choose a place,
   how many). Moving out of a deck says the deck's list gets shorter.
 - Places tab: a **New place** form (name + type).
-- New **Decks** tab: your decks; open one to see Need / In deck / Own (and
+- New **Decks** tab: the decks; open one to see Need / In deck / Own (and
   Missing for a wishlist); **Import a decklist**: name, "I own it" or
   "wishlist", paste, **Preview** (nothing saved, shows warnings) then
   **Import**. On a taken name it asks: *Import as a second deck* or
   *Replace the old one* (with what replacing does spelled out).
 
-**Not built on purpose:** deleting decks or places from the page, and
-switching a deck between physical and wishlist. Both are destructive or have
-refusal rules (D-041) worth deciding with you first. The CLI still does them.
+**Not built on purpose (to review, D-046):** deleting decks or places from the
+page, and switching a deck between physical and wishlist. Both are
+destructive or have refusal rules (D-041) worth deciding first. The CLI still
+does them.
 
 **Checked:** 15 new server tests (685 total); then on a fresh throwaway copy
-of your database: created "Binder B", moved a Doflamingo into it, previewed
+of the database: created "Binder B", moved a Doflamingo into it, previewed
 the Kid list as a wishlist (not saved), a duplicate name got 409, totals
-stayed 172. Your real database afterwards: still 2 places, 3 decks, 172
+stayed 172. The real database afterwards: still 2 places, 3 decks, 172
 copies, 0 arts.
 
-**This is how you could add your remaining decks:** Decks tab → Import a
-decklist → paste → Preview → Import. Same result as `optcg deck import`.
+**The remaining decks can go in this way:** Decks tab → Import a decklist →
+paste → Preview → Import. Same result as `optcg deck import`.
 
-### Beyond M1: M4 fast entry (done, commit below)
+### Beyond M1: M4 fast entry (done, commit `7506f2f`)
 - **Cards tab → "Add cards"**: a bar appears - *New cards go to: [place]*.
-  "Only cards I own" switches off (new cards are mostly ones you don't own).
+  "Only cards I own" switches off (new cards are mostly ones not owned yet).
   Every tile gets a red **+1** button: one press = one copy, unsorted, into
-  that place (`collection add`). The bar says what was added and how many you
-  own now, with an **Undo** for that last add. **Done adding** closes it.
-- Server: `POST /api/copies/add`, and `POST /api/copies/remove` which the
+  that place (`collection add`). The bar says what was added and how many are
+  owned now, with an **Undo** for that last add. **Done adding** closes it.
+- Server: `POST /api/copies/add`, and `POST /api/copies/remove`, which the
   page uses **only for Undo** (from the same place it just added to).
-- **No -1 button on purpose** (the plan had +1/-1). A -1 on every tile would
-  make removing cards from your collection one stray click away, and removing
-  copies is the kind of thing you told me not to do tonight. Undo covers
-  mistakes; selling or trading a card is still `collection remove`. Decide in
-  D-047 whether you want a -1.
-- Art isn't picked on +1: copies land unsorted and you set the art on the
-  card's detail, the same as imported decks. PHASE_2 warned about this (D-003);
-  with Set art on the detail it's one extra step instead of a wrong record.
+- **No -1 button on purpose (to review, D-047)** - the plan had +1/-1. A -1 on
+  every tile would make removing cards from the collection one stray click
+  away, and removing copies was off limits for this work. Undo covers
+  mistakes; selling or trading a card is still `collection remove`.
+- Art isn't picked on +1: copies land unsorted and the art is set on the
+  card's detail, the same as imported decks. PHASE_2 warned about this
+  (D-003); with Set art on the detail it's one extra step instead of a wrong
+  record.
 - 6 new server tests (691 total; server code 100% covered).

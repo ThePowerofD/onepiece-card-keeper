@@ -1524,9 +1524,9 @@ their card list being in it; the database itself stays out of git.
 
 ## D-045 — How M1 was built: a tile per card, a Places tab, plain React
 
-**2026-11-19** · *Built overnight on branch `m1-browser` without the owner
-present (they asked for that). These choices are the builder's and wait for
-the owner's review - supersede any of them freely.*
+**2026-11-19** · *Built on branch `m1-browser`. **To review** before merging:
+these choices were made during building, not discussed first - supersede any
+of them freely.*
 
 **The grid has one tile per gameplay card, not one per art.** PHASE_2 said to
 add pictures to `list_cards`, which lists every printing. But a copy whose art
@@ -1561,8 +1561,8 @@ file, the CLI's functions, the API - plus a set-art round trip.
 
 ## D-046 — M2 and M3 in the browser, minus the destructive parts
 
-**2026-11-19** · *Built overnight on branch `m1-browser` after M1, at the
-owner's request to go past M1. Waits for the owner's review.*
+**2026-11-19** · *Built on branch `m1-browser` after M1, to go past M1.
+**To review** before merging.*
 
 **What's in.** Creating a storage place; moving copies between places (from a
 pile on the card detail); the deck list and each deck's owned vs missing; and
@@ -1573,7 +1573,7 @@ import on an in-memory copy and keeps nothing - the browser's `--dry-run`
 never picks (D-017).
 
 **What's out, on purpose.** Deleting a deck or a place, and switching a deck
-between physical and wishlist. Deleting was off limits for the night, and
+between physical and wishlist. Deleting was kept out of this round, and
 both have consequences (copies to just-loose, D-041's refusal for a wishlist
 with cards) that deserve the owner's say on how a screen should ask. Building
 a deck from a wishlist - PHASE_2 M3's gather-the-cards screen - is also not
@@ -1588,8 +1588,7 @@ does; the page says so before saving.
 
 ## D-047 — Fast entry is +1 with Undo; no -1 on the grid yet
 
-**2026-11-19** · *Built overnight on branch `m1-browser`; waits for the
-owner's review.*
+**2026-11-19** · *Built on branch `m1-browser`. **To review** before merging.*
 
 PHASE_2 M4 asked for `+1` / `-1` straight from the grid. **Only `+1` was
 built**, plus **Undo** of the last add. A `-1` on every tile puts "this copy
